@@ -1,0 +1,9 @@
+# Created by .ignore support plugin (hsz.mobi)
+
+stride/
+
+.idea/
+
+data/
+
+.ipynb_checkpoints/
