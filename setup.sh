@@ -1,31 +1,16 @@
 #!/usr/bin/env bash
 
-mkdir data
-mkdir stride
+#### Virtual Env ####
 
-#### STRIDE installation ####
-wget http://webclu.bio.wzw.tum.de/stride/stride.tar.gz
+conda create -p skempi python=3.6
 
-tar -xvf stride.tar.gz -C stride
+conda install -p skempi pip -c anaconda
 
-cd ./stride
+#conda install -p skempi visdom -c conda-forge
 
-make
+### activate skempi
+source activate skempi
 
-cd ../
-rm stride.tar.gz
+pip install -r requirements.txt
 
-
-#### Download SKEMPI ####
-cd ./data
-
-wget https://life.bsc.es/pid/mutation_database/SKEMPI_1.1.csv
-
-wget https://life.bsc.es/pid/mutation_database/SKEMPI_pdbs.tar.gz
-
-mkdir pdbs
-tar -xvf SKEMPI_pdbs.tar.gz -C pdbs
-
-cd ../
-
-
+python -m ipykernel install --user --name skempi
