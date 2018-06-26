@@ -1,3 +1,4 @@
+import os
 import sys
 import pickle
 
@@ -77,6 +78,12 @@ class MSA(object):
     def __getitem__(self, i):
         return self._msa[i]
 
+    def to_fasta(self, pth):
+        lines = [">%s\n%s\n" % (uid if i == 0 else "SEQ%d" % i, seq)
+                 for i, (uid, seq) in enumerate(self._msa)]
+        with open(pth, "w+") as f:
+            f.writelines(lines)
+
 
 class Profile(object):
     def __init__(self, pdb, chain):
@@ -113,6 +120,7 @@ class SkempiRecord(object):
         self.init_dictionaries()
         self.dist_mat = None
         self._profiles = {}
+        self._alignments = {}
         self.init_profiles()
         self._stride = Stride(self.pdb)
 
@@ -122,9 +130,13 @@ class SkempiRecord(object):
 
     def init_profiles(self):
         self._profiles = {c: Profile(self.pdb, c) for c in self.chains}
+        self._alignments = {c: MSA(self.pdb, c) for c in self.chains}
 
     def get_profile(self, chain_id):
         return self._profiles[chain_id]
+
+    def get_alignment(self, chain_id):
+        return self._alignments[chain_id]
 
     @property
     def stride(self):
@@ -172,7 +184,6 @@ def to_fasta(skempi_entries, out_file):
     sequences = []
     for entry in skempi_entries:
         for chain in entry:
-            print(chain, len(chain))
             sequences.append(SeqRecord(Seq(chain.seq), chain.id))
     SeqIO.write(sequences, open(out_file, 'w+'), "fasta")
 
@@ -205,3 +216,23 @@ if __name__ == "__main__":
         skempi_entries.append(SkempiRecord(*t))
 
     to_fasta(skempi_entries, "../data/skempi.fas")
+
+    lines = []
+
+    for entry in tqdm(skempi_entries, desc="skempi entries processed"):
+
+        for chain in entry:
+            aln = entry.get_alignment(chain.chain_id)
+            aln.to_fasta("../data/msas/%s.msa" % chain.id)
+
+            cline = "perl /groups/bioseq.home/Josef/consurf-db/installation/bin/consurf " \
+                    "--PDB /bioseq/data/results/ConSurf_DB_2017/test/skempi/pdbs/%s.pdb " \
+                    "--CHAIN %s --Out_Dir /bioseq/data/results/ConSurf_DB_2017/test/skempi/consurf/%s " \
+                    "-MSA /bioseq/data/results/ConSurf_DB_2017/test/skempi/msas/%s.msa -SEQ_NAME %s " \
+                    "-Matrix WAG --w /bioseq/data/results/ConSurf_DB_2017/test/skempi/consurf/%s --consurfdb\n" \
+                    % (chain.pdb, chain.chain_id, chain.id, chain.id, chain.id, chain.id)
+
+            lines.append(cline)
+
+    with open("../data/consurf.sh", "w+") as f:
+        f.writelines(lines)
