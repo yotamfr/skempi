@@ -36,10 +36,7 @@ skempi_records = {}
 
 for t in tqdm(set([tuple(pdb_str.split('_')) for pdb_str in prots]),
               desc="skempi entries processed"):
-    skempi_records[t] = SkempiRecord(*t)
-
-
-# In[12]:
+    skempi_records[t] = SkempiStruct(*t)
 
 
 def comp_ei(mut, skempi_record, B, radius):
@@ -106,8 +103,6 @@ def grid_search_ei(matrices=[BLOSUM62, SKOJ970101, BASU010101]):
     return res_dict
 
 
-# In[15]:
-
 all_features = {}
 
 
@@ -124,14 +119,7 @@ register_eis(eis)
 
 save_object(all_features, "../data/all_skempi_features")
 
-
-# In[16]:
-
-
 # cps = grid_search_cp()
-
-
-# In[17]:
 
 
 def comp_cp_a_b(mut, skempi_record, C, radius):
@@ -192,7 +180,7 @@ def CP_A_B(mut, skempi, C, radius=6):
         return C[(a, m)] - C[(a, w)]
 
     retA, retB = 0, 0
-    for chain_b, j in skempi.get_sphere_indices(chain_a, i,radius):
+    for chain_b, j in skempi.get_sphere_indices(chain_a, i, radius):
 
         a = skempi[chain_b][j].name
         if j == i and chain_b == chain_a:

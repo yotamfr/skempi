@@ -1,9 +1,22 @@
 import os.path as osp
 import pandas as pd
 
+# PDB_PATH = "../data/pdbs_n"
 PDB_PATH = "../data/pdbs"
 
-SKEMPI_DF = skempi_df = pd.read_excel(osp.join('../data', 'SKEMPI_1.1.xlsx'))
+skempi_df = pd.read_excel(osp.join('../data', 'SKEMPI_1.1.xlsx'))
+
+
+from pymongo import MongoClient
+
+mongo_url = "mongodb://localhost:27017/"
+db_name = "prot2vec"
+client = MongoClient(mongo_url)
+db = client[db_name]
+collection_msa = db.skempi_uniprot20
+# collection_msa = db.skempi_scop90
+# collection_msa = db.skempi_uniclust30
+
 
 G1 = [
     "%s_%s_%s" % (s[:4], s[4], s[5].strip()) for s in
@@ -47,5 +60,3 @@ G5 = [
     """.split(' ') if s.strip()]
 
 G6 = [prot for prot in skempi_df.Protein if prot not in set(G1 + G2 + G3 + G4 + G5)]
-
-

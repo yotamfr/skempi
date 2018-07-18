@@ -31,8 +31,10 @@ out_dir = "./hhblits"
 prefix_hhsuite = "/usr/share/hhsuite"
 prefix_blast = "/usr/bin"
 # hhblits_dbname = "pdb70"
-hhblits_dbname = "uniprot20_2016_02"
-
+# hhblits_dbname = "scop90"
+# hhblits_dbname = "scop95"
+# hhblits_dbname = "uniprot20_2016_02"
+hhblits_dbname = "uniclust30_2017_10"
 batch_size = 2
 num_cpu = 2
 max_filter = 20000

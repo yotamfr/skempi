@@ -97,8 +97,51 @@ M rows = ARNDCQEGHILKMFPSTWYV, cols = ARNDCQEGHILKMFPSTWYV
 //
 """
 
+ARGP820101_STR = """
+H ARGP820101
+D Hydrophobicity index (Argos et al., 1982)
+R PMID:7151796
+A Argos, P., Rao, J.K.M. and Hargrave, P.A.
+T Structural prediction of membrane-bound proteins
+J Eur. J. Biochem. 128, 565-575 (1982)
+C JOND750101    1.000  SIMZ760101    0.967  GOLD730101    0.936
+  TAKK010101    0.906  MEEJ810101    0.891  ROSM880104    0.872
+  CIDH920105    0.867  LEVM760106    0.865  CIDH920102    0.862
+  MEEJ800102    0.855  MEEJ810102    0.853  ZHOH040101    0.841
+  CIDH920103    0.827  PLIV810101    0.820  CIDH920104    0.819
+  LEVM760107    0.806  NOZY710101    0.800  GUYH850103   -0.808
+  PARJ860101   -0.835  WOLS870101   -0.838  BULH740101   -0.854
+I    A/L     R/K     N/M     D/F     C/P     Q/S     E/T     G/W     H/Y     I/V
+    0.61    0.60    0.06    0.46    1.07      0.    0.47    0.07    0.61    2.22
+    1.53    1.15    1.18    2.02    1.95    0.05    0.05    2.65    1.88    1.32
+//
+"""
 
-class _AAIndex(object):
+FASG760101_STR = """
+H FASG760101
+D Molecular weight (Fasman, 1976)
+R 
+A Fasman, G.D., ed.
+T 
+J "Handbook of Biochemistry and Molecular Biology", 3rd ed., Proteins - Volume 
+  1, CRC Press, Cleveland (1976)
+C FAUJ880103    0.979  CHOC760101    0.978  LEVM760102    0.966
+  CHAM820101    0.962  CHOC750101    0.956  LEVM760105    0.951
+  PONJ960101    0.945  CHAM830106    0.943  TSAJ990102    0.940
+  TSAJ990101    0.935  BIGC670101    0.919  GOLD730102    0.918
+  KRIW790103    0.910  HARY940101    0.910  GRAR740103    0.908
+  FAUJ880106    0.899  RADA880106    0.870  WOLS870102    0.866
+  MCMT640101    0.845  CHAM830105    0.839  ROSG850101    0.838
+  DAWD720101    0.833  FAUJ880104    0.825  OOBM770102    0.821
+  LEVM760107    0.815  RADA880103   -0.954
+I    A/L     R/K     N/M     D/F     C/P     Q/S     E/T     G/W     H/Y     I/V
+   89.09  174.20  132.12  133.10  121.15  146.15  147.13   75.07  155.16  131.17
+  131.17  146.19  149.21  165.19  115.13  105.09  119.12  204.24  181.19  117.15
+//
+"""
+
+
+class _AAIndex2(object):
 
     def __init__(self, stream, name):
         self._dict = list(AAIndex2Parser()(stream))[0].Data
@@ -118,13 +161,37 @@ class _AAIndex(object):
         return hash(self._name)
 
 
-BLOSUM62 = _AAIndex(StringIO(BLOSUM62_STR), "BLOSUM62")
+class _AAIndex1(object):
 
-BASU010101 = _AAIndex(StringIO(BASU010101_STR), "BASU010101")
+    def __init__(self, stream, name):
+        self._dict = list(AAIndex1Parser()(stream))[0].Data
+        self._name = name
 
-SKOJ970101 = _AAIndex(StringIO(SKOJ970101_STR), "SKOJ970101")
+    def __getitem__(self, aa):
+        ret = self._dict[aa]
+        return ret
+
+    def __str__(self):
+        return self._name
+
+    def __hash__(self):
+        return hash(self._name)
+
+
+ARGP820101 = _AAIndex1(StringIO(ARGP820101_STR), "ARGP820101")  # Hydrophobicity
+
+FASG760101 = _AAIndex1(StringIO(FASG760101_STR), "FASG760101")  # Molecular weight
+
+BLOSUM62 = _AAIndex2(StringIO(BLOSUM62_STR), "BLOSUM62")
+
+BASU010101 = _AAIndex2(StringIO(BASU010101_STR), "BASU010101")
+
+SKOJ970101 = _AAIndex2(StringIO(SKOJ970101_STR), "SKOJ970101")
 
 
 if __name__ == "__main__":
     print(BASU010101[('A', 'R')])
     print(SKOJ970101[('A', 'K')])
+    print(ARGP820101['A'])
+    print(FASG760101['V'])
+

@@ -102,5 +102,9 @@ AA = AminoAcids()
 amino_acids = ['A', 'R', 'N', 'D', 'C', 'Q', 'E', 'G', 'H', 'I', 'L', 'K', 'M', 'F', 'P', 'S', 'T', 'W', 'Y', 'V']
 assert len(set(amino_acids)) == 20
 
-if __name__=="__main__":
+VDW_RADII = {"H": 1.2, "C": 1.7, "N": 1.55, "O": 1.52, "P": 1.8, "S": 1.8}
+# VDW_RADII = {"C": 1.7, "N": 1.55, "O": 1.52, "P": 1.8, "S": 1.8}
+
+
+if __name__ == "__main__":
     print(AA.blosum62)
