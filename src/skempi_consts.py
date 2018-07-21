@@ -17,6 +17,7 @@ collection_msa = db.skempi_uniprot20
 # collection_msa = db.skempi_scop90
 # collection_msa = db.skempi_uniclust30
 
+NUM_GROUPS = 5
 
 G1 = [
     "%s_%s_%s" % (s[:4], s[4], s[5].strip()) for s in

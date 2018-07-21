@@ -123,9 +123,11 @@ class Stride(object):
 
 
 class SkempiRecord(object):
-    def __init__(self, skempi_struct, mutations, ddg):
+    def __init__(self, skempi_struct, mutations, ddg, group=0, minus_ddg=False):
         self.struct = skempi_struct
         self.mutations = mutations
+        self.is_minus = minus_ddg
+        self.group = group
         self.ddg = ddg
 
     def get_descriptor(self, mat, agg=np.mean):
@@ -325,7 +327,10 @@ def load_skempi_records(skempi_structs, minus_ddg=False):
         else:
             struct = skempi_structs[(pdb, ca, cb)]
         ddg = -d_row["DDG"] if minus_ddg else d_row["DDG"]
-        record = SkempiRecord(struct, mutations, ddg)
+        groups = ["%s_%s_%s" % (pdb, ca, cb) in g for g in [G1, G2, G3, G4, G5]]
+        assert sum(groups) <= 1
+        group = -1 if not sum(groups) else groups.index(True)
+        record = SkempiRecord(struct, mutations, ddg, group + 1, minus_ddg)
         records.append(record)
         pbar.update(1)
     pbar.close()
