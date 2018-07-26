@@ -125,7 +125,11 @@ class PDB(object):
 
     def __init__(self, pdb, chains_dict={}):
         self.chains = chains_dict
-        self.id = pdb
+        self._id = pdb
+
+    @property
+    def pdb(self):
+        return self._id
 
     def __iter__(self):
         for chain in self.chains.values():
@@ -212,6 +216,10 @@ def parse_pdb(pdb, fd):
         residues, chains, chain_id = _handle_line(line, residues, chains, pdb, chain_id)
 
     return PDB(pdb, chains)
+
+
+def parse_pdb2(pdb, path):
+    return parse_pdb(pdb, open(path, "r"))
 
 
 if __name__ == "__main__":

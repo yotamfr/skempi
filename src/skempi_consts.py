@@ -19,6 +19,8 @@ collection_msa = db.skempi_uniprot20
 
 NUM_GROUPS = 5
 
+ABC = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
 G1 = [
     "%s_%s_%s" % (s[:4], s[4], s[5].strip()) for s in
     """

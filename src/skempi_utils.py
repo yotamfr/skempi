@@ -16,11 +16,13 @@ from sklearn.metrics.pairwise import euclidean_distances
 try:
     from src.consts import *
     from src.aaindex import *
+    from src.modeller import *
     from src.pdb_utils import *
     from src.skempi_consts import *
 except ImportError:
     from consts import *
     from aaindex import *
+    from modeller import *
     from pdb_utils import *
     from skempi_consts import *
 
@@ -47,8 +49,9 @@ class SkempiChain(object):
 
 class Mutation(object):
 
-    def __init__(self, mutation_str, reverse=False):
-        iw, im = (-1, 0) if reverse else (0, -1)
+    def __init__(self, mutation_str):
+        self._str = mutation_str
+        iw, im = (0, -1)
         try:
             self.w = mutation_str[iw]
             self.chain_id = mutation_str[1]
@@ -64,7 +67,10 @@ class Mutation(object):
             self.ins_code = mutation_str[-2]
 
     def __str__(self):
-        return str(vars(self))
+        return self._str
+
+    def __reversed__(self):
+        return Mutation("%s%s%s" % (self.m, str(self)[1:-1], self.w))
 
 
 class MSA(object):
@@ -166,13 +172,24 @@ class SkempiRecord(object):
                  ei, cp_a1, cp_b1, cp_a2, cp_b2]
         return np.asarray(feats)
 
+    def __reversed__(self):
+        wt = self.struct
+        mutations = [reversed(mut) for mut in self.mutations]
+        modelname, ws = apply_modeller(wt, self.mutations)
+        mutant = SkempiStruct(modelname, wt.chains_a, wt.chains_b, pdb_path=ws, use_dict=True)
+        return SkempiRecord(mutant, mutations, -self.ddg, self.group, self.is_minus)
+
 
 class SkempiStruct(object):
 
-    def __init__(self, modelname, chains_a, chains_b, pdb_path=PDB_PATH):
+    def __init__(self, modelname, chains_a, chains_b, pdb_path=PDB_PATH, use_dict=False):
         fd = open(osp.join(pdb_path, "%s.pdb" % modelname), 'r')
         pdb = modelname[:4].upper()
         struct = parse_pdb(pdb, fd)
+        chain_ids = sorted([c for c in chains_a + chains_b])
+        chains_dict = {c: ABC[i] for i, c in enumerate(chain_ids)}
+        if use_dict:
+            struct.chains = {c: struct[chains_dict[c]] for c in chain_ids}
         self.struct = PDB(pdb, {c: struct[c] for c in chains_a + chains_b})
         self.modelname = modelname
         self.chains_a = chains_a
@@ -308,14 +325,21 @@ def load_skempi_structs(pdb_path, compute_dist_mat=True):
     return skempi_structs
 
 
+def parse_mutations(mutations_str, reverse=False):
+    mutations = [Mutation(s) for s in mutations_str.split(',')]
+    if reverse:
+        return [reversed(mut) for mut in mutations]
+    else:
+        return mutations
+
+
 def load_skempi_records(skempi_structs, minus_ddg=False):
     records = []
     pbar = tqdm(range(len(skempi_df)), desc="skempi records processed")
     for _, row in skempi_df.iterrows():
         d_row = row.to_dict()
         pdb, ca, cb = tuple(row.Protein.split('_'))
-        mutations = [Mutation(s, reverse=minus_ddg)
-                     for s in d_row["Mutation(s)_cleaned"].split(',')]
+        mutations = parse_mutations(d_row["Mutation(s)_cleaned"])
         if minus_ddg:
             mut_strs = ['%d%s%s' % (mut.i + 1, AAA[mut.w], mut.chain_id)
                         for mut in mutations]
