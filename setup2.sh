@@ -9,8 +9,10 @@ conda install -p skempi2 pip -c anaconda
 #conda install -p skempi visdom -c conda-forge
 
 ### activate skempi
-source activate ./skempi2
+source activate skempi2
 
-pip2 install -r requirements.txt
+pip install -r requirements.txt
 
 python -m ipykernel install --user --name skempi2
+
+pip install cogent
