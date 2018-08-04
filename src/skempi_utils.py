@@ -114,18 +114,18 @@ class Profile(object):
 
 
 class Stride(object):
-    def __init__(self, pdb):
-        df = pd.read_csv('../data/stride/%s.out' % pdb)
+    def __init__(self, stride_df):
         self._dict = {}
         self._total = 0.0
-        for i, row in df.iterrows():
+        for i, row in stride_df.iterrows():
             d_row = row.to_dict()
             self._total += (d_row["ASA_Chain"] - d_row["ASA"])
-            self._dict[(row.Chain, row.Res - 1)] = d_row
+            chain_id, res_i = d_row["Chain"], int(d_row["Res"]) - 1
+            self._dict[(chain_id, res_i)] = d_row
 
     def __getitem__(self, t):
-        chain, res = t
-        return self._dict[(chain, res)]
+        chain_id, res_i = t
+        return self._dict[(chain_id, res_i)]
 
 
 class SkempiRecord(object):
@@ -142,8 +142,7 @@ class SkempiRecord(object):
 
     def get_ei(self, mat=BLOSUM62):
         struct = self.struct
-        eis = [EI(mut.m, mut.w, struct.get_profile(mut.chain_id), mut.i, mat)
-               for mut in self.mutations]
+        eis = [EI(mut.m, mut.w, struct.get_profile(mut.chain_id), mut.i, mat) for mut in self.mutations]
         return np.sum(eis)
 
     def get_shells_cp(self, inner, outer, mat=BASU010101):
@@ -156,7 +155,7 @@ class SkempiRecord(object):
         return agg([func(struct.stride[(mut.chain_id, mut.i)])
                     for mut in self.mutations])
 
-    def features(self, free_mem=0):
+    def features(self, free_mem=True):
         if self.struct.dist_mat is None:
             self.struct.compute_dist_mat()
         log_mutations = np.log(len(self.mutations))
@@ -166,31 +165,27 @@ class SkempiRecord(object):
         ei = self.get_ei()
         cp_a1, cp_b1, _ = self.get_shells_cp(2.0, 4.0)
         cp_a2, cp_b2, _ = self.get_shells_cp(4.0, 6.0)
-        if free_mem == 1:
-            self.struct.free_dist_mat()
-        feats = [log_mutations, hydphob, molweight, tota_asa,
-                 ei, cp_a1, cp_b1, cp_a2, cp_b2]
+        if free_mem: self.struct.free_dist_mat()
+        feats = [log_mutations, hydphob, molweight, tota_asa, ei, cp_a1, cp_b1, cp_a2, cp_b2]
         return np.asarray(feats)
 
     def __reversed__(self):
         wt = self.struct
         mutations = [reversed(mut) for mut in self.mutations]
         modelname, ws = apply_modeller(wt, self.mutations)
-        mutant = SkempiStruct(modelname, wt.chains_a, wt.chains_b, pdb_path=ws, use_dict=True)
-        return SkempiRecord(mutant, mutations, -self.ddg, self.group, self.is_minus)
+        mutant = SkempiStruct(modelname, wt.chains_a, wt.chains_b, pdb_path=ws)
+        return SkempiRecord(mutant, mutations, -self.ddg, self.group, not self.is_minus)
+
+    def __str__(self):
+        return "<%s: %s>" % (self.struct, [str(m) for m in self.mutations])
 
 
 class SkempiStruct(object):
 
-    def __init__(self, modelname, chains_a, chains_b, pdb_path=PDB_PATH, use_dict=False):
+    def __init__(self, modelname, chains_a, chains_b, pdb_path=PDB_PATH):
         fd = open(osp.join(pdb_path, "%s.pdb" % modelname), 'r')
-        pdb = modelname[:4].upper()
-        struct = parse_pdb(pdb, fd)
-        chain_ids = sorted([c for c in chains_a + chains_b])
-        chains_dict = {c: ABC[i] for i, c in enumerate(chain_ids)}
-        if use_dict:
-            struct.chains = {c: struct[chains_dict[c]] for c in chain_ids}
-        self.struct = PDB(pdb, {c: struct[c] for c in chains_a + chains_b})
+        cs = list(chains_a + chains_b)
+        self.struct = parse_pdb(modelname, fd, dict(zip(cs, cs)))
         self.modelname = modelname
         self.chains_a = chains_a
         self.chains_b = chains_b
@@ -201,20 +196,30 @@ class SkempiStruct(object):
         self.dist_mat = None
         self._profiles = {}
         self._alignments = {}
-        self.init_profiles()
-        self._stride = Stride(pdb)
+        self._init_profiles()
+        self._stride = None
+        if pdb_path != "../data/pdbs_n":
+            self._init_stride(pdb_path)
 
     @property
     def pdb(self):
         return self.modelname[:4].upper()
 
     def __str__(self):
-        return "<SkempiStruct %s_%s_%s>" % (self.pdb, self.chains_a, self.chains_b)
+        return "<SkempiStruct %s_%s_%s>" % (self.modelname, self.chains_a, self.chains_b)
 
-    def init_profiles(self):
+    def _init_profiles(self):
         chains = self.chains
         self._profiles = {c: SkempiProfile(self.pdb, c) for c in chains}
         self._alignments = {c: MSA(self.pdb, c) for c in chains}
+
+    def _init_stride(self, pdb_path=PDB_PATH):
+        modelname = self.modelname
+        ca, cb = self.chains_a, self.chains_b
+        pth = osp.join('stride', '%s.out' % modelname)
+        cline = "python stride.py %s %s %s %s" % (modelname, ca, cb, pdb_path)
+        assert os.WEXITSTATUS(os.system(cline)) == 0
+        self._stride = Stride(pd.read_csv(pth))
 
     def get_profile(self, chain_id):
         return self._profiles[chain_id]
@@ -269,7 +274,7 @@ class SkempiStruct(object):
         return self._get_indices(chain_id, res_i, lambda mat_row: np.logical_and(r_inner <= mat_row, mat_row <= r_outer))
 
     def __iter__(self):
-        for chain_obj in self.chains.values():
+        for chain_obj in self.struct:
             yield chain_obj
 
 
@@ -313,14 +318,13 @@ def load_object(pth):
     return loaded_dist_mat
 
 
-def load_skempi_structs(pdb_path, compute_dist_mat=True):
+def load_skempi_structs(pdb_path, compute_dist_mat=False):
     prots = skempi_df.Protein.values
     skempi_structs = {}
     for t in tqdm(set([tuple(pdb_str.split('_')) for pdb_str in prots]),
                   desc="skempi structures processed"):
         struct = SkempiStruct(*t, pdb_path=pdb_path)
-        if compute_dist_mat:
-            struct.compute_dist_mat()
+        if compute_dist_mat: struct.compute_dist_mat()
         skempi_structs[t] = struct
     return skempi_structs
 
@@ -333,36 +337,26 @@ def parse_mutations(mutations_str, reverse=False):
         return mutations
 
 
-def load_skempi_records(skempi_structs, minus_ddg=False):
+def load_skempi_records(skempi_structs):
     records = []
     pbar = tqdm(range(len(skempi_df)), desc="skempi records processed")
     for _, row in skempi_df.iterrows():
         d_row = row.to_dict()
         pdb, ca, cb = tuple(row.Protein.split('_'))
         mutations = parse_mutations(d_row["Mutation(s)_cleaned"])
-        if minus_ddg:
-            mut_strs = ['%d%s%s' % (mut.i + 1, AAA[mut.w], mut.chain_id)
-                        for mut in mutations]
-            modelname = '%s_%s' % (pdb.lower(), ':'.join(mut_strs))
-            try:
-                struct = SkempiStruct(modelname, ca, cb, pdb_path='../data/pdbs_r/')
-            except IOError as e:
-                struct = None
-        else:
-            struct = skempi_structs[(pdb, ca, cb)]
-        ddg = -d_row["DDG"] if minus_ddg else d_row["DDG"]
+        struct = skempi_structs[(pdb, ca, cb)]
+        ddg = d_row["DDG"]
         groups = ["%s_%s_%s" % (pdb, ca, cb) in g for g in [G1, G2, G3, G4, G5]]
         assert sum(groups) <= 1
-        group = -1 if not sum(groups) else groups.index(True)
-        record = SkempiRecord(struct, mutations, ddg, group + 1, minus_ddg)
+        group = 0 if sum(groups) == 0 else (groups.index(True) + 1)
+        record = SkempiRecord(struct, mutations, ddg, group)
         records.append(record)
         pbar.update(1)
     pbar.close()
     return records
 
 
-if __name__ == "__main__":
-
+def consurf():
     skempi_entries = list(load_skempi_structs(PDB_PATH).values())
     to_fasta(skempi_entries, "../data/skempi.fas")
 
@@ -385,3 +379,20 @@ if __name__ == "__main__":
 
     with open("../data/consurf.sh", "w+") as f:
         f.writelines(lines)
+
+
+if __name__ == "__main__":
+    row = skempi_df.loc[0]
+    pdb, ca, cb = t = row.Protein.split('_')
+    skempi_structs = {}
+    struct = SkempiStruct(*t, pdb_path='../data/pdbs')
+    mutations = parse_mutations(row["Mutation(s)_cleaned"])
+    ddg = row.DDG
+    groups = ["%s_%s_%s" % (pdb, ca, cb) in g for g in [G1, G2, G3, G4, G5]]
+    assert sum(groups) <= 1
+    group = 0 if sum(groups) == 0 else (groups.index(True) + 1)
+    r = SkempiRecord(struct, mutations, ddg, group)
+    r.features(True)
+    rr = reversed(r)
+    rr.features(True)
+

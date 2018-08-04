@@ -6,6 +6,10 @@ stride/
 
 data/
 
+src/modeller
+
+src/stride
+
 .ipynb_checkpoints/
 
 dbs/

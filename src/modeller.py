@@ -5,8 +5,7 @@ import shutil
 
 from pdb_utils import *
 
-from skempi_utils import *
-
+from skempi_consts import *
 
 fmt_modeller = """
 # Comparative modeling by the automodel class
@@ -45,11 +44,11 @@ def create_modeller_workspace(template, mutant, workspace):
 
 def ali_template(model):
     header = ">P1;%s\n" % model.name
-    chains = model.chains
-    chains = sorted(chains.iteritems(), key=lambda kv: kv[0])
-    chains_ids = "\t".join("::%s" % (k,) for k, _ in chains)
+    sequences = model.sequences
+    seqs = [k for k, _ in sequences]
+    chains_ids = "\t".join("::%s" % (k,) for k in [seqs[0], seqs[-1]])
     structure = "%s:%s\t%s::::\n" % (model.type, model.name, chains_ids)
-    seqs = [''.join(v) for _, v in chains]
+    seqs = [''.join(v) for _, v in sequences]
     seqs = "/\n".join(seqs) + "*"
     return header + structure + seqs + "\n"
 
@@ -68,10 +67,10 @@ class Template(object):
         return self._struct.pdb
 
     @property
-    def chains(self):
-        seqs = {}
-        for c, chain in self._struct.chains.iteritems():
-            seqs[c] = [res.name for res in chain]
+    def sequences(self):
+        seqs = []
+        for c in self._struct.struct._chains:
+            seqs.append((c.chain_id, [res.name for res in c]))
         return seqs
 
     def __str__(self):
@@ -93,14 +92,15 @@ class Mutant(object):
         return "%s_%s" % (self._struct.pdb, "_".join([str(mut) for mut in self._mutations]))
 
     @property
-    def chains(self):
+    def sequences(self):
         seqs = {}
-        for c, chain in self._struct.chains.iteritems():
-            seqs[c] = [res.name for res in chain]
+        chains = self._struct.struct._chains
+        for c in chains:
+            seqs[c.chain_id] = [res.name for res in c]
         for mut in self._mutations:
             assert seqs[mut.chain_id][mut.i] == mut.w
             seqs[mut.chain_id][mut.i] = mut.m
-        return seqs
+        return [(c, seqs[c.chain_id]) for c in chains]
 
     def __str__(self):
         return ali_template(self)
@@ -116,18 +116,22 @@ class Ali(object):
         return "%s\n%s" % (self.template, self.mutant)
 
 
-def apply_modeller(skempi_struct, mutations):
+def apply_modeller(skempi_struct, mutations, pdb_path=PDB_PATH):
     tmpl = Template(skempi_struct)
     mutant = Mutant(skempi_struct, mutations)
     ws = "modeller/%s" % mutant.name
     if not osp.exists(ws): os.makedirs(ws)
-    indir = "../data/pdbs"
-    src = osp.join(indir, "%s.pdb" % tmpl.name)
-    dst = osp.join(ws, "%s.pdb" % tmpl.name)
-    shutil.copy(src, dst)
+    src1 = osp.join(pdb_path, "%s.pdb" % tmpl.name)
+    dst1 = osp.join(ws, "%s.pdb" % tmpl.name)
+    shutil.copy(src1, dst1)
     create_modeller_workspace(tmpl, mutant, ws)
+    dst2 = osp.join(ws, "%s.pdb" % mutant.name)
+    if osp.exists(dst2): return mutant.name, ws
     os.system("cd %s; python mutate-model.py" % ws)
-    src = glob(osp.join(ws, "%s*.pdb" % mutant.name))[0]
-    dst = osp.join(ws, "%s.pdb" % mutant.name)
-    shutil.move(src, dst)
+    src2 = glob(osp.join(ws, "%s*.pdb" % mutant.name))[0]
+    with open(src2, "r") as f:
+        ids = [c.chain_id for c in skempi_struct.struct]
+        chain_dict = dict(zip(MODELLER_CHAINS, ids))
+        struct = parse_pdb(mutant.name, f, chain_dict)
+        struct.to_pdb(dst2)
     return mutant.name, ws

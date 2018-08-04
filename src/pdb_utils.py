@@ -60,11 +60,24 @@ def download_pdb(pdb, outdir="../data/pdbs_n"):
 
 class Atom(object):
 
-    def __init__(self, name, res_num, x, y, z, temp):
+    def __init__(self, name, num, residue, x, y, z, temp):
+        self.num = num
         self.name = name
         self.temp = temp
-        self.res_num = res_num
+        self.res = residue
         self._coord = (x, y, z)
+
+    @property
+    def res_name(self):
+        return self.res.name
+
+    @property
+    def res_num(self):
+        return self.res.num
+
+    @property
+    def chain_id(self):
+        return self.res.chain.chain_id
 
     @property
     def type(self):
@@ -74,12 +87,24 @@ class Atom(object):
     def coord(self):
         return self._coord
 
+    def __str__(self):
+        atom_num = self.num
+        atom_name = self.name
+        res_num = self.res_num
+        aa = self.res_name
+        chain_id = self.chain_id
+        (x, y, z) = self._coord
+        return '{typ: <6}{0: >5}  {1: <4}{2: <4}{3: <1}{4: >4}    {5:8.3f}{6:8.3f}{7:8.3f}'\
+            .format(atom_num, atom_name, AAA[aa], chain_id, res_num, x, y, z, typ='ATOM')
+
 
 class Residue(object):
 
-    def __init__(self, name, atoms=[]):
+    def __init__(self, name, num, chain, atoms=[]):
         self.atoms = atoms
         self.name = name
+        self.chain = chain
+        self.num = num
 
     def __iter__(self):
         for atom in self.atoms:
@@ -89,7 +114,7 @@ class Residue(object):
         return self.atoms[i]
 
     def __str__(self):
-        return "<Residue %s>" % self.name
+        return "<Residue %s>" % AAA[self.name]
 
 
 class Chain(object):
@@ -110,6 +135,10 @@ class Chain(object):
         return "<Chain %s %d>" % (self.id, len(self))
 
     @property
+    def atoms(self):
+        return reduce(lambda atoms, res: atoms + res.atoms, self.residues, [])
+
+    @property
     def seq(self):
         return ''.join([res.name for res in self.residues])
 
@@ -123,28 +152,52 @@ class Chain(object):
 
 class PDB(object):
 
-    def __init__(self, pdb, chains_dict={}):
-        self.chains = chains_dict
-        self._id = pdb
+    def __init__(self, modelname, chains=[], chain_dict={}):
+        self._id_to_ix = {}
+        self._id = modelname
+        self._chains = []
+        for _, c in enumerate(chains):
+            if len(chain_dict) > 0:
+                if c.chain_id not in chain_dict:
+                    continue
+                cid = chain_dict[c.chain_id]
+                c.chain_id = cid
+            else:
+                cid = c.chain_id
+            self._id_to_ix[cid] = len(self._chains)
+            self._chains.append(c)
+
+    @property
+    def chains(self):
+        return {c.chain_id: c for c in self._chains}
 
     @property
     def pdb(self):
         return self._id
 
     def __iter__(self):
-        for chain in self.chains.values():
+        for chain in self._chains:
             yield chain
 
     def __getitem__(self, chain_id):
-        return self.chains[chain_id]
+        return self._chains[self._id_to_ix[chain_id]]
+
+    def to_pdb(self, path):
+        lines = []
+        for chain in self._chains:
+            for atom in chain.atoms:
+                lines.append("%s\n" % atom)
+            lines.append("TER\n")
+        with open(path, "w+") as f:
+            f.writelines(lines)
 
 
-def _handle_line(line, residues, chains, pdb, chain_id=''):
+def _handle_line(line, residues, chains, pdb, chain_id='', residue_num=0):
 
     typ = line.strip().split(' ')[0]
 
     if not line:
-        return residues, chains, chain_id
+        return residues, chains, chain_id, residue_num
 
     if typ in UNHANDLED:
         pass
@@ -166,7 +219,9 @@ def _handle_line(line, residues, chains, pdb, chain_id=''):
                  line[30:38], line[38:46], line[46:54], \
                  line[54:60], line[60:66], line[72:76], line[76:78]
         l_line = [s.strip() for s in l_line]
+
         atom_num, atom_name, res_name, chain_id, res_num, x, y, z, occup, temp, ident, sym = l_line
+        atom_num, res_num = int(atom_num), int(res_num)
 
         try:
             occup, temp = float(occup), float(temp)
@@ -176,46 +231,46 @@ def _handle_line(line, residues, chains, pdb, chain_id=''):
         try:
             res_name = AA_dict[res_name[-3:]]
         except KeyError:
-            return residues, chains, chain_id
+            return residues, chains, chain_id, res_num
 
-        atom_num, res_num = int(atom_num), int(res_num)
-        atom = Atom(atom_name, res_num, x, y, z, temp)
+        atom = Atom(atom_name, atom_num, None, x, y, z, temp)
 
-        if len(residues) == 0:
-            res = Residue(res_name, [atom])
-            residues.append(res)
-        elif residues[-1].atoms[-1].res_num != res_num:
-            res = Residue(res_name, [atom])
+        if len(residues) == 0 or residue_num != res_num:
+            res = Residue(res_name, len(residues) + 1, None, [atom])
             residues.append(res)
         else:
             res = residues[-1]
             res.atoms.append(atom)
 
+        atom.res = res
+        residue_num = res_num
+
     elif typ == 'TER':
         assert chain_id
         chain = Chain(pdb, chain_id, residues)
-        chains[chain_id] = chain
+        for res in residues: res.chain = chain
+        chains.append(chain)
         residues = []
 
     else:
         raise ValueError("Unidentified row type: %s" % typ)
 
-    return residues, chains, chain_id
+    return residues, chains, chain_id, residue_num
 
 
-def parse_pdb(pdb, fd):
+def parse_pdb(pdb, fd, chain_dict={}):
 
     line = fd.readline()
 
-    residues, chains, chain_id = _handle_line(line, [], {}, pdb)
+    residues, chains, chain_id, res_num = _handle_line(line, [], [], pdb)
 
     while line:
 
         line = fd.readline()
 
-        residues, chains, chain_id = _handle_line(line, residues, chains, pdb, chain_id)
+        residues, chains, chain_id, res_num = _handle_line(line, residues, chains, pdb, chain_id, res_num)
 
-    return PDB(pdb, chains)
+    return PDB(pdb, chains, chain_dict)
 
 
 def parse_pdb2(pdb, path):
@@ -224,8 +279,9 @@ def parse_pdb2(pdb, path):
 
 if __name__ == "__main__":
     import os.path as osp
-    pdb = "1tm1"
-    PDB_PATH = "../data/"
+    pdb = "1A4Y"
+    PDB_PATH = "../data/pdbs"
     fd = open(osp.join(PDB_PATH, "%s.pdb" % pdb), 'r')
     struct = parse_pdb(pdb, fd)
-    print(struct.id)
+    struct.to_pdb("../data/1a4y.pdb")
+    print(struct.pdb)
