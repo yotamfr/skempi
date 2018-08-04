@@ -6,9 +6,7 @@ PDB_PATH = "../data/pdbs"
 
 skempi_df = pd.read_excel(osp.join('../data', 'SKEMPI_1.1.xlsx'))
 
-
 from pymongo import MongoClient
-
 mongo_url = "mongodb://localhost:27017/"
 db_name = "prot2vec"
 client = MongoClient(mongo_url)
