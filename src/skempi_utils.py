@@ -211,7 +211,7 @@ class SkempiStruct(object):
     def _init_profiles(self):
         chains = self.chains
         self._profiles = {c: SkempiProfile(self.pdb, c) for c in chains}
-        # self._alignments = {c: MSA(self.pdb, c) for c in chains}
+        self._alignments = {c: MSA(self.pdb, c) for c in chains}
 
     def _init_stride(self, pdb_path=PDB_PATH):
         modelname = self.modelname

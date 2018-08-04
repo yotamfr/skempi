@@ -35,7 +35,8 @@ def parse_stride(out):
         line = out.readline()
 
     aas, chains, ress, sss, phis, psis, asas = zip(*info)
-    return pd.DataFrame({"AA": aas, "Chain": chains, "Res": ress, "SS": sss, "Phi": phis, "Psi": psis, "ASA": asas})
+    return pd.DataFrame({"AA": aas, "Chain": chains, "Res": ress,
+                         "SS": sss, "Phi": phis, "Psi": psis, "ASA": asas})
 
 
 if __name__ == "__main__":
