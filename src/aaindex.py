@@ -1,3 +1,4 @@
+# Requires python 2.7
 from cogent.parse.aaindex import *
 from StringIO import StringIO
 

@@ -1,15 +1,28 @@
 # Created by .ignore support plugin (hsz.mobi)
 
-stride/
 
 .idea/
-
-data/
-
-src/modeller
-
-src/stride
-
 .ipynb_checkpoints/
 
+*.pyc
+*.pkl
+
+stride/
+src/stride
+src/modeller
+
+
 dbs/
+data/
+docs/
+csvs/
+hhblits/
+skempi2/
+src/bindprofx/
+src/models/
+
+3DCNN_data_process/
+3DCNN_data/
+
+src/__pycache__/
+src/*.ipynb

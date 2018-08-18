@@ -60,10 +60,11 @@ def download_pdb(pdb, outdir="../data/pdbs_n"):
 
 class Atom(object):
 
-    def __init__(self, name, num, residue, x, y, z, temp):
+    def __init__(self, name, num, residue, x, y, z, occup, temp):
         self.num = num
         self.name = name
         self.temp = temp
+        self.occup = occup
         self.res = residue
         self._coord = (x, y, z)
 
@@ -87,15 +88,34 @@ class Atom(object):
     def coord(self):
         return self._coord
 
+    @property
+    def x(self):
+        return self._coord[0]
+
+    @property
+    def y(self):
+        return self._coord[1]
+
+    @property
+    def z(self):
+        return self._coord[2]
+
     def __str__(self):
         atom_num = self.num
         atom_name = self.name
         res_num = self.res_num
         aa = self.res_name
         chain_id = self.chain_id
+        occup = self.occup
+        temp = self.temp
         (x, y, z) = self._coord
-        return '{typ: <6}{0: >5}  {1: <4}{2: <4}{3: <1}{4: >4}    {5:8.3f}{6:8.3f}{7:8.3f}'\
-            .format(atom_num, atom_name, AAA[aa], chain_id, res_num, x, y, z, typ='ATOM')
+        # return '{typ: <6}{0: >5}  {1: <4}{2: <4}{3: <1}{4: >4}    ' \
+        #        '{5:8.3f}{6:8.3f}{7:8.3f}'\
+        #     .format(atom_num, atom_name, AAA[aa], chain_id, res_num, x, y, z, typ='ATOM')
+        return '{typ: <6}{0: >5}  {1: <4}{2: <4}{3: <1}{4: >4}    ' \
+               '{5:8.3f}{6:8.3f}{7:8.3f}{8:6.2f}{9:6.2f}          ' \
+               ' {10: <4}'\
+            .format(atom_num, atom_name, AAA[aa], chain_id, res_num, x, y, z, occup, temp, self.type, typ='ATOM')
 
 
 class Residue(object):
@@ -105,6 +125,15 @@ class Residue(object):
         self.name = name
         self.chain = chain
         self.num = num
+
+    @property
+    def ca(self):
+        return self.get_atom_by_name("CA")
+
+    def get_atom_by_name(self, name):
+        atom = [a for a in self.atoms if a.name == name]
+        assert len(atom) == 1
+        return atom[0]
 
     def __iter__(self):
         for atom in self.atoms:
@@ -226,14 +255,14 @@ def _handle_line(line, residues, chains, pdb, chain_id='', residue_num=0):
         try:
             occup, temp = float(occup), float(temp)
         except ValueError as e:
-            occup, temp = -1, -1
+            occup, temp = 1.00, 00.00
         x, y, z = float(x), float(y), float(z)
         try:
             res_name = AA_dict[res_name[-3:]]
         except KeyError:
             return residues, chains, chain_id, res_num
 
-        atom = Atom(atom_name, atom_num, None, x, y, z, temp)
+        atom = Atom(atom_name, atom_num, None, x, y, z, occup, temp)
 
         if len(residues) == 0 or residue_num != res_num:
             res = Residue(res_name, len(residues) + 1, None, [atom])

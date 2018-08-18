@@ -1,4 +1,5 @@
 import os
+import sys
 from os import path as osp
 from glob import glob
 import shutil
@@ -127,7 +128,8 @@ def apply_modeller(skempi_struct, mutations, pdb_path=PDB_PATH):
     create_modeller_workspace(tmpl, mutant, ws)
     dst2 = osp.join(ws, "%s.pdb" % mutant.name)
     if osp.exists(dst2): return mutant.name, ws
-    os.system("cd %s; python mutate-model.py" % ws)
+    cline = "cd %s; %s mutate-model.py" % (ws, sys.executable)
+    assert os.WEXITSTATUS(os.system(cline)) == 0
     src2 = glob(osp.join(ws, "%s*.pdb" % mutant.name))[0]
     with open(src2, "r") as f:
         ids = [c.chain_id for c in skempi_struct.struct]

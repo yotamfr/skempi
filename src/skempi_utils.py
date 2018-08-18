@@ -12,25 +12,30 @@ import os.path as osp
 from tqdm import tqdm
 
 from sklearn.metrics.pairwise import euclidean_distances
+from sklearn.metrics.pairwise import manhattan_distances
 
 try:
+    import src.stride
     from src.consts import *
     from src.aaindex import *
     from src.modeller import *
     from src.pdb_utils import *
+    from src.bindprofx import *
     from src.skempi_consts import *
 except ImportError:
+    import stride
     from consts import *
     from aaindex import *
     from modeller import *
     from pdb_utils import *
+    from bindprofx import *
     from skempi_consts import *
 
 
-def get_distance_matrix(atoms1, atoms2):
+def get_distance_matrix(atoms1, atoms2, metric):
     X = np.matrix([a.coord for a in atoms1])
     Y = np.matrix([a.coord for a in atoms2])
-    return euclidean_distances(X, Y)
+    return metric(X, Y)
 
 
 class SkempiChain(object):
@@ -136,9 +141,12 @@ class SkempiRecord(object):
         self.group = group
         self.ddg = ddg
 
-    def get_descriptor(self, mat, agg=np.mean):
-        # MolWeight:FASG760101, Hydrophobic:ARGP820101
-        return agg([mat[mut.m] - mat[mut.w] for mut in self.mutations])
+    @property
+    def modelname(self):
+        return self.struct.modelname
+
+    def __hash__(self):
+        return hash(str(self))
 
     def get_ei(self, mat=BLOSUM62):
         struct = self.struct
@@ -150,24 +158,29 @@ class SkempiRecord(object):
         return np.sum(cps, axis=0)
 
     def get_asa(self, agg=np.sum):
-        func = lambda stride: stride["ASA_Chain"]-stride["ASA"]
-        struct = self.struct
-        return agg([func(struct.stride[(mut.chain_id, mut.i)])
-                    for mut in self.mutations])
+        return agg([delta_asa(self.struct, mut) for mut in self.mutations])
 
     def features(self, free_mem=True):
         if self.struct.dist_mat is None:
             self.struct.compute_dist_mat()
         log_mutations = np.log(len(self.mutations))
-        hydphob = self.get_descriptor(ARGP820101)
-        molweight = self.get_descriptor(FASG760101)
+        bfactor = self.get_bfactor()
+        hydphob = get_descriptor(self.mutations, ARGP820101)
+        molweight = get_descriptor(self.mutations, FASG760101)
         tota_asa = self.get_asa()
         ei = self.get_ei()
         cp_a1, cp_b1, _ = self.get_shells_cp(2.0, 4.0)
         cp_a2, cp_b2, _ = self.get_shells_cp(4.0, 6.0)
         if free_mem: self.struct.free_dist_mat()
-        feats = [log_mutations, hydphob, molweight, tota_asa, ei, cp_a1, cp_b1, cp_a2, cp_b2]
+        feats = [log_mutations, bfactor, hydphob, molweight, tota_asa, ei, cp_a1, cp_b1, cp_a2, cp_b2]
         return np.asarray(feats)
+
+    def get_bfactor(self, agg=np.min, pdb_path="../data/pdbs_n"):  # obtain wt b-factor
+        pdb = self.struct.pdb
+        ca = self.struct.chains_a
+        cb = self.struct.chains_b
+        struct = SkempiStruct(pdb, ca, cb, pdb_path=pdb_path)
+        return agg([avg_bfactor(struct, mut) for mut in self.mutations])
 
     def __reversed__(self):
         wt = self.struct
@@ -182,7 +195,7 @@ class SkempiRecord(object):
 
 class SkempiStruct(object):
 
-    def __init__(self, modelname, chains_a, chains_b, pdb_path=PDB_PATH):
+    def __init__(self, modelname, chains_a, chains_b, pdb_path=PDB_PATH, carbons_only=True):
         fd = open(osp.join(pdb_path, "%s.pdb" % modelname), 'r')
         cs = list(chains_a + chains_b)
         self.struct = parse_pdb(modelname, fd, dict(zip(cs, cs)))
@@ -192,7 +205,7 @@ class SkempiStruct(object):
         self.res_chain_to_atom_indices = {}
         self.atom_indices_to_chain_res = {}
         self.atoms = []
-        self.init_dictionaries()
+        self.init_dictionaries(carbons_only)
         self.dist_mat = None
         self._profiles = {}
         self._alignments = {}
@@ -211,14 +224,13 @@ class SkempiStruct(object):
     def _init_profiles(self):
         chains = self.chains
         self._profiles = {c: SkempiProfile(self.pdb, c) for c in chains}
-        self._alignments = {c: MSA(self.pdb, c) for c in chains}
+        # self._alignments = {c: MSA(self.pdb, c) for c in chains}
 
     def _init_stride(self, pdb_path=PDB_PATH):
         modelname = self.modelname
         ca, cb = self.chains_a, self.chains_b
         pth = osp.join('stride', '%s.out' % modelname)
-        cline = "python stride.py %s %s %s %s" % (modelname, ca, cb, pdb_path)
-        assert os.WEXITSTATUS(os.system(cline)) == 0
+        stride.main(modelname, ca, cb, pdb_path)
         self._stride = Stride(pd.read_csv(pth))
 
     def get_profile(self, chain_id):
@@ -235,11 +247,11 @@ class SkempiStruct(object):
     def chains(self):
         return self.struct.chains
 
-    def init_dictionaries(self):
+    def init_dictionaries(self, carbons_only):
         for chain in self.struct:
             for res_i, res in enumerate(chain):
                 for atom in res:
-                    if atom.type != 'C':
+                    if carbons_only and atom.type != 'C':
                         continue
                     chain_id = chain.chain_id
                     if (chain_id, res_i) in self.res_chain_to_atom_indices:
@@ -249,8 +261,9 @@ class SkempiStruct(object):
                     self.atom_indices_to_chain_res[len(self.atoms)] = (chain_id, res_i)
                     self.atoms.append(atom)
 
-    def compute_dist_mat(self):
-        self.dist_mat = get_distance_matrix(atoms1=self.atoms, atoms2=self.atoms)
+    def compute_dist_mat(self, metric=euclidean_distances):
+        X = np.matrix([a.coord for a in self.atoms])
+        self.dist_mat = metric(X, X)
 
     def free_dist_mat(self):
         del self.dist_mat
@@ -286,6 +299,18 @@ def to_fasta(skempi_entries, out_file):
     SeqIO.write(sequences, open(out_file, 'w+'), "fasta")
 
 
+def delta_asa(struct, mut):
+    stride = struct.stride[(mut.chain_id, mut.i)]
+    return stride["ASA_Chain"] - stride["ASA"]
+
+
+def avg_bfactor(struct, mut):
+    res_i, chain_id = mut.i, mut.chain_id
+    res = struct[chain_id][res_i]
+    temps = [a.temp for a in res.atoms]
+    return np.mean(temps)
+
+
 def CP(mut, skempi, C, inner, outer):
     i, chain_a = mut.i, mut.chain_id
     m, w = mut.m, mut.w
@@ -300,6 +325,10 @@ def CP(mut, skempi, C, inner, outer):
         else:
             retB += C[(a, m)] - C[(a, w)]
     return retA, retB, retA + retB
+
+
+def get_descriptor(mutations, mat, agg=np.mean):    # MolWeight:FASG760101, Hydrophobic:ARGP820101
+    return agg([mat[mut.m] - mat[mut.w] for mut in mutations])
 
 
 def EI(m, w, P, i, B):
@@ -318,12 +347,12 @@ def load_object(pth):
     return loaded_dist_mat
 
 
-def load_skempi_structs(pdb_path, compute_dist_mat=False):
+def load_skempi_structs(pdb_path, compute_dist_mat=False, carbons_only=True):
     prots = skempi_df.Protein.values
     skempi_structs = {}
     for t in tqdm(set([tuple(pdb_str.split('_')) for pdb_str in prots]),
                   desc="skempi structures processed"):
-        struct = SkempiStruct(*t, pdb_path=pdb_path)
+        struct = SkempiStruct(*t, pdb_path=pdb_path, carbons_only=carbons_only)
         if compute_dist_mat: struct.compute_dist_mat()
         skempi_structs[t] = struct
     return skempi_structs
@@ -356,6 +385,16 @@ def load_skempi_records(skempi_structs):
     return records
 
 
+def records_to_xy(skempi_records, load_negative=False):
+    data = []
+    flag = int(load_negative)
+    for record in tqdm(skempi_records, desc="records processed"):
+        assert record.struct is not None
+        r = reversed(record) if load_negative else record
+        data.append([r.features(True), r.ddg, [r.group, flag], r.modelname, r.mutations])
+    return data
+
+
 def consurf():
     skempi_entries = list(load_skempi_structs(PDB_PATH).values())
     to_fasta(skempi_entries, "../data/skempi.fas")
@@ -382,17 +421,20 @@ def consurf():
 
 
 if __name__ == "__main__":
-    row = skempi_df.loc[0]
-    pdb, ca, cb = t = row.Protein.split('_')
-    skempi_structs = {}
-    struct = SkempiStruct(*t, pdb_path='../data/pdbs')
-    mutations = parse_mutations(row["Mutation(s)_cleaned"])
-    ddg = row.DDG
-    groups = ["%s_%s_%s" % (pdb, ca, cb) in g for g in [G1, G2, G3, G4, G5]]
-    assert sum(groups) <= 1
-    group = 0 if sum(groups) == 0 else (groups.index(True) + 1)
-    r = SkempiRecord(struct, mutations, ddg, group)
-    r.features(True)
-    rr = reversed(r)
-    rr.features(True)
-
+    for i in tqdm(range(len(skempi_df))):
+        row = skempi_df.loc[i]
+        pdb, ca, cb = t = row.Protein.split('_')
+        skempi_structs = {}
+        struct = SkempiStruct(*t, pdb_path='../data/pdbs')
+        mutations = parse_mutations(row["Mutation(s)_cleaned"])
+        ddg = row.DDG
+        groups = ["%s_%s_%s" % (pdb, ca, cb) in g for g in [G1, G2, G3, G4, G5]]
+        assert sum(groups) <= 1
+        group = 0 if sum(groups) == 0 else (groups.index(True) + 1)
+        r = SkempiRecord(struct, mutations, ddg, group)
+        r.features(True)
+        rr = reversed(r)
+        r.features(True)
+        rr.features(True)
+        print(bindprofx(r))
+        print(bindprofx(rr))
