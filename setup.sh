@@ -11,6 +11,10 @@ conda --add channels salilab
 conda install modeller
 pip install --upgrade pip
 
+conda config --add channels conda-forge
+conda install pytables
+conda install hdf5
+
 pip install numpy
 pip install --no-binary pandas -I pandas
 pip install xlrd

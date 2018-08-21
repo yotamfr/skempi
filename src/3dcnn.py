@@ -3,10 +3,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 from torch import optim
-import pickle
 
 from tempfile import gettempdir
 from collections import OrderedDict
+from scipy.stats import pearsonr
+import pickle
 
 try:
     from src.pytorch_utils import *
@@ -17,32 +18,32 @@ except ImportError:
     from skempi_utils import *
     from grid_utils import *
 
-
 USE_CUDA = True
-BATCH_SIZE = 2
-LR = 0.01
-NUM_DESCRIPTORS = 8
+BATCH_SIZE = 32
+LR = 0.
+NUM_DESCRIPTORS = 2
+# NUM_DESCRIPTORS = 8
+
+rotations_x = [rot_x(r * 2 * math.pi) for r in np.arange(0, .99, .25)]
+rotations_y = [rot_y(r * 2 * math.pi) for r in np.arange(0, .99, .25)]
+rotations_z = [rot_z(r * 2 * math.pi) for r in np.arange(0, .99, .25)]
+augmentations = rotations_x + rotations_y + rotations_z
 
 
 class SingleMutationLoader(object):
 
-    def __init__(self, skempi_records, rotations_interval_rad=1.0):
-        skip = rotations_interval_rad
-        rotations_x = [rot_x(r * 2 * math.pi) for r in np.arange(0, .99, skip)]
-        rotations_y = [rot_y(r * 2 * math.pi) for r in np.arange(0, .99, skip)]
-        rotations_z = [rot_z(r * 2 * math.pi) for r in np.arange(0, .99, skip)]
-        rotations = rotations_x + rotations_y + rotations_z
+    def __init__(self, skempi_records, augmentations):
         self._records = []
         for record in skempi_records:
             struct = record.struct
             ddg = record.ddg
             group = record.group
             for mut in record.mutations:
-                for j, rot in enumerate(rotations):
+                for rot in augmentations:
                     rec = SkempiRecord(struct, [mut], ddg, group)
-                    self._records.append([j, rot, rec])
+                    self._records.append([rot, rec])
         self._l_cache = {}
-        self._d_cache = {}
+        self._v_cache = {}
         self._curr = 0
 
     def reset(self):
@@ -54,30 +55,39 @@ class SingleMutationLoader(object):
 
     def next(self):
         if self._curr < len(self._records):
-            rot_ix, rot, rec = self._records[self._curr]
+            rot, rec = self._records[self._curr]
             assert len(rec.mutations) == 1
             mut = rec.mutations[0]
             struct = rec.struct
             res = struct[mut.chain_id][mut.i]
+
             try:
-                data = self._d_cache[(rot_ix, rec)]
-            except:
-                data = get_4channel_voxels(struct, res,  nv=20, R=rot)
-                self._d_cache[(rot_ix, rec)] = data
+                view = self._v_cache[rec]
+                view.rotate(rot)
+
+            except KeyError:
+                view = View(struct, res, num_voxels=20)
+                self._v_cache[rec] = view
+
+            data = view.voxels
+
             try:
                 labels = self._l_cache[rec]
-            except:
-                struct.compute_dist_mat()
+
+            except KeyError:
                 bfactor = rec.get_bfactor()
-                hydphob = get_descriptor([mut], ARGP820101)
-                molweight = get_descriptor([mut], FASG760101)
-                tota_asa = rec.get_asa()
-                cp_a1, cp_b1, _ = rec.get_shells_cp(2.0, 4.0)
-                cp_a2, cp_b2, _ = rec.get_shells_cp(4.0, 6.0)
-                labels = [bfactor, hydphob, molweight, tota_asa, cp_a1, cp_b1, cp_a2, cp_b2]
+                # hydphob = get_descriptor([mut], ARGP820101)
+                # molweight = get_descriptor([mut], FASG760101)
+                asa = rec.get_asa()
+                # cp_a1, cp_b1, _ = rec.get_shells_cp(2.0, 4.0)
+                # cp_a2, cp_b2, _ = rec.get_shells_cp(4.0, 6.0)
+                # labels = [bfactor, hydphob, molweight, asa, cp_a1, cp_b1, cp_a2, cp_b2]
+                labels = [bfactor, asa]
+
                 self._l_cache[rec] = labels
-                struct.free_dist_mat()
+
             self._curr += 1
+
             return data, np.asarray(labels)
         else:
             raise StopIteration
@@ -195,8 +205,7 @@ def evaluate(model, batch_generator, length_xy, batch_size=BATCH_SIZE):
         preds[start:end, :] = y_hat.data.cpu().numpy()
         truth[start:end, :] = y.data.cpu().numpy()
         pbar.update(len(y))
-    cors = [pearsonr(np.asarray(preds[:, j]), np.asarray(truth[:, j]))
-            for j in range(NUM_DESCRIPTORS)]
+    cors = [pearsonr(preds[:, j], truth[:, j])[0] for j in range(NUM_DESCRIPTORS)]
     desc = " ".join("r%d=%.2f" % (i, cor) for (i, cor) in enumerate(cors))
     pbar.set_description(desc)
     pbar.close()
@@ -254,8 +263,8 @@ if __name__ == "__main__":
     training_set = [record for record in skempi_records if 1 <= record.group <= 4]
     validation_set = [record for record in skempi_records if record.group == 5]
 
-    loader_trn = SingleMutationLoader(training_set, rotations_interval_rad=.25)
-    loader_val = SingleMutationLoader(validation_set, rotations_interval_rad=1)
+    loader_trn = SingleMutationLoader(training_set, augmentations)
+    loader_val = SingleMutationLoader(validation_set, augmentations)
 
     net = CNN3dV1()
     opt = optim.Adamax(net.parameters(), lr=LR)
@@ -278,7 +287,7 @@ if __name__ == "__main__":
         else:
             print("=> no checkpoint found at '%s'" % args.resume)
 
-    adalr = AdaptiveLR(opt, LR, num_iterations=10000)
+    adalr = AdaptiveLR(opt, LR, num_iterations=1000)
 
     # Move models to GPU
     if USE_CUDA:

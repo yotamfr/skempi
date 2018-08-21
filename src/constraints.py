@@ -191,8 +191,7 @@ def run_cv(data_pos, data_neg):
     X_pos, y, ix_pos, _, _ = [np.asarray(d) for d in zip(*data_pos)]
     X_neg, _, ix_neg, _, _ = [np.asarray(d) for d in zip(*data_neg)]
 
-    groups_data = []
-    preds_data = []
+    preds_data, groups_data = [], []
 
     for i, pair in enumerate(comb(range(NUM_GROUPS), 2)):
 

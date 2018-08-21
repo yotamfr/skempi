@@ -132,7 +132,7 @@ class Residue(object):
 
     def get_atom_by_name(self, name):
         atom = [a for a in self.atoms if a.name == name]
-        assert len(atom) == 1
+        assert len(atom) >= 1
         return atom[0]
 
     def __iter__(self):

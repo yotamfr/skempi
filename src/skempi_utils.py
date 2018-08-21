@@ -77,6 +77,9 @@ class Mutation(object):
     def __reversed__(self):
         return Mutation("%s%s%s" % (self.m, str(self)[1:-1], self.w))
 
+    def __hash__(self):
+        return hash(self._str)
+
 
 class MSA(object):
     def __init__(self, pdb, chain):
@@ -146,7 +149,7 @@ class SkempiRecord(object):
         return self.struct.modelname
 
     def __hash__(self):
-        return hash(str(self))
+        return hash((self.struct, tuple(self.mutations)))
 
     def get_ei(self, mat=BLOSUM62):
         struct = self.struct
@@ -214,6 +217,9 @@ class SkempiStruct(object):
         if pdb_path != "../data/pdbs_n":
             self._init_stride(pdb_path)
 
+    def __hash__(self):
+        return hash((self.modelname, self.chains_a, self.chains_b))
+
     @property
     def pdb(self):
         return self.modelname[:4].upper()
@@ -274,6 +280,8 @@ class SkempiStruct(object):
 
     def _get_indices(self, chain_id, res_i, condition):
         mat = self.dist_mat
+        if mat is None:
+            raise ValueError("call: struct.compute_dist_mat()")
         row_indices = self.res_chain_to_atom_indices[(chain_id, res_i)]
         col_indices = []
         for i, row in enumerate(row_indices):
