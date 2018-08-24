@@ -13,6 +13,7 @@ pip install --upgrade pip
 
 conda config --add channels conda-forge
 conda install pytables
+conda install deepdish
 conda install hdf5
 
 pip install numpy

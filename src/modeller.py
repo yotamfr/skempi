@@ -117,12 +117,12 @@ class Ali(object):
         return "%s\n%s" % (self.template, self.mutant)
 
 
-def apply_modeller(skempi_struct, mutations, pdb_path=PDB_PATH):
+def apply_modeller(skempi_struct, mutations):
     tmpl = Template(skempi_struct)
     mutant = Mutant(skempi_struct, mutations)
     ws = "modeller/%s" % mutant.name
     if not osp.exists(ws): os.makedirs(ws)
-    src1 = osp.join(pdb_path, "%s.pdb" % tmpl.name)
+    src1 = skempi_struct.path
     dst1 = osp.join(ws, "%s.pdb" % tmpl.name)
     shutil.copy(src1, dst1)
     create_modeller_workspace(tmpl, mutant, ws)

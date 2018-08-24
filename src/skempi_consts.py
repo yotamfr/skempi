@@ -4,8 +4,11 @@ import pandas as pd
 # PDB_PATH = "../data/pdbs_n"
 PDB_PATH = "../data/pdbs"
 
-skempi_df = pd.read_excel(osp.join('../data', 'SKEMPI_1.1.xlsx'))
-
+try:
+    skempi_df = pd.read_excel(osp.join('../data', 'SKEMPI_1.1.xlsx'))
+except IOError as e:
+    print("warning: %s" % e)
+    skempi_df = None
 
 from pymongo import MongoClient
 
@@ -61,5 +64,3 @@ G5 = [
     2WPTAB 1A22AB 2B0ZAB 2B10AB 2B11AB 2B12AB 2PCBAB 2PCCAB 1KTZAB 1LFDAB
     1FCCAC 1GL0EI 1GL1AI 1HE8AB 2HLEAB 2I9BAE
     """.split(' ') if s.strip()]
-
-G6 = [prot for prot in skempi_df.Protein if prot not in set(G1 + G2 + G3 + G4 + G5)]

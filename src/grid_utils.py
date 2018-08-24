@@ -7,26 +7,27 @@ from scipy.ndimage.filters import gaussian_filter
 
 
 def get_4channel_voxels(struct, res, R, nv=20):
-    c1 = get_3d_grid_around_res(struct, res, rot=R, num_voxels=nv, atom_types=['C']).voxels
-    c2 = get_3d_grid_around_res(struct, res, rot=R, num_voxels=nv, atom_types=['O']).voxels
-    c3 = get_3d_grid_around_res(struct, res, rot=R, num_voxels=nv, atom_types=['N']).voxels
-    c4 = get_3d_grid_around_res(struct, res, rot=R, num_voxels=nv, atom_types=['S']).voxels
+    c1 = get_3d_voxels_around_res(struct, res, rot=R, num_voxels=nv, atom_types=['C'])
+    c2 = get_3d_voxels_around_res(struct, res, rot=R, num_voxels=nv, atom_types=['O'])
+    c3 = get_3d_voxels_around_res(struct, res, rot=R, num_voxels=nv, atom_types=['N'])
+    c4 = get_3d_voxels_around_res(struct, res, rot=R, num_voxels=nv, atom_types=['S'])
     return np.stack((c1, c2, c3, c4), axis=0)
 
 
-def get_3d_grid_around_res(struct, res, rot, num_voxels=20, atom_types=['C']):
+def get_3d_voxels_around_res(struct, res, rot=None, num_voxels=20, atom_types=['C']):
     center = res.ca.coord
     r = num_voxels // 2
     X = np.asarray([a.coord for a in struct.atoms if a.type in atom_types])
     if len(X) == 0:
-        return Grid([], num_voxels)
+        return voxelize([], num_voxels, smooth=True)
     X -= center
-    X = rot(X)
+    if rot is not None:
+        X = rot(X)
     x_indx = np.intersect1d(np.where(X[:, 0] > -r), np.where(X[:, 0] < r))
     y_indx = np.intersect1d(np.where(X[:, 1] > -r), np.where(X[:, 1] < r))
     z_indx = np.intersect1d(np.where(X[:, 2] > -r), np.where(X[:, 2] < r))
     indx = reduce(np.intersect1d, [x_indx, y_indx, z_indx])
-    return Grid(X[indx, :], num_voxels)
+    return voxelize(X[indx, :], num_voxels, smooth=True)
 
 
 def rot(axis, theta):
@@ -77,16 +78,6 @@ def voxelize(X, num_voxels, smooth=True):
         voxels[:, :, :] = gaussian_filter(voxels,sigma=0.6, order=0, output=None, mode='reflect', cval=0.0, truncate=4.0)
         voxels[:, :, :] *= 1000
     return voxels
-
-
-class Grid(object):
-    def __init__(self, X, num_voxels=20):
-        self.X = X
-        self.nv = num_voxels
-
-    @property
-    def voxels(self, smooth=True):
-        return voxelize(self.X, self.nv, smooth)
 
 
 class View(object):

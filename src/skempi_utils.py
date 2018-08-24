@@ -199,9 +199,9 @@ class SkempiRecord(object):
 class SkempiStruct(object):
 
     def __init__(self, modelname, chains_a, chains_b, pdb_path=PDB_PATH, carbons_only=True):
-        fd = open(osp.join(pdb_path, "%s.pdb" % modelname), 'r')
+        self.path = osp.join(pdb_path, "%s.pdb" % modelname)
         cs = list(chains_a + chains_b)
-        self.struct = parse_pdb(modelname, fd, dict(zip(cs, cs)))
+        self.struct = parse_pdb(modelname, open(self.path, 'r'), dict(zip(cs, cs)))
         self.modelname = modelname
         self.chains_a = chains_a
         self.chains_b = chains_b
@@ -212,7 +212,10 @@ class SkempiStruct(object):
         self.dist_mat = None
         self._profiles = {}
         self._alignments = {}
-        self._init_profiles()
+        try:
+            self._init_profiles()
+        except IOError as e:
+            print("warining: %s" % e)
         self._stride = None
         if pdb_path != "../data/pdbs_n":
             self._init_stride(pdb_path)
@@ -429,20 +432,15 @@ def consurf():
 
 
 if __name__ == "__main__":
-    for i in tqdm(range(len(skempi_df))):
-        row = skempi_df.loc[i]
-        pdb, ca, cb = t = row.Protein.split('_')
-        skempi_structs = {}
-        struct = SkempiStruct(*t, pdb_path='../data/pdbs')
-        mutations = parse_mutations(row["Mutation(s)_cleaned"])
-        ddg = row.DDG
-        groups = ["%s_%s_%s" % (pdb, ca, cb) in g for g in [G1, G2, G3, G4, G5]]
-        assert sum(groups) <= 1
-        group = 0 if sum(groups) == 0 else (groups.index(True) + 1)
-        r = SkempiRecord(struct, mutations, ddg, group)
-        r.features(True)
-        rr = reversed(r)
-        r.features(True)
-        rr.features(True)
-        print(bindprofx(r))
-        print(bindprofx(rr))
+    pdb, ca, cb = t = (u'1CSE', u'E', u'I')
+    struct = SkempiStruct(*t, pdb_path='../data/pdbs')
+    mutations = parse_mutations("LI38G")
+    groups = ["%s_%s_%s" % (pdb, ca, cb) in g for g in [G1, G2, G3, G4, G5]]
+    assert sum(groups) <= 1
+    group = 3
+    r = SkempiRecord(struct, mutations, ddg=2.529, group=3)
+    r.features(True)
+    print(bindprofx(r))
+    rr = reversed(r)
+    rr.features(True)
+    print(bindprofx(rr))

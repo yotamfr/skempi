@@ -7,7 +7,7 @@ from torch import optim
 from tempfile import gettempdir
 from collections import OrderedDict
 from scipy.stats import pearsonr
-import pickle
+import deepdish as dd
 
 try:
     from src.pytorch_utils import *
@@ -32,8 +32,10 @@ augmentations = rotations_x + rotations_y + rotations_z
 
 class SingleMutationLoader(object):
 
-    def __init__(self, skempi_records, augmentations):
+    def __init__(self, skempi_records, augmentations, path_to_cache):
         self._records = []
+        self._curr = 0
+
         for record in skempi_records:
             struct = record.struct
             ddg = record.ddg
@@ -42,12 +44,26 @@ class SingleMutationLoader(object):
                 for rot in augmentations:
                     rec = SkempiRecord(struct, [mut], ddg, group)
                     self._records.append([rot, rec])
-        self._l_cache = {}
-        self._v_cache = {}
-        self._curr = 0
+
+        self.path_to_cache = path_to_cache
+        if not os.path.exists(path_to_cache):
+            os.makedirs(path_to_cache)
+
+        try:
+            self._v_cache = dd.io.load("%s/vcache.h5" % path_to_cache)
+            self._l_cache = dd.io.load("%s/lcache.h5" % path_to_cache)
+        except IOError:
+            self._l_cache = {}
+            self._v_cache = {}
+
+    def dump(self):
+        for _ in tqdm(self, desc="loading..."):
+            pass
+        path_to_cache = self.path_to_cache
+        dd.io.save("%s/vcache.h5" % path_to_cache, self._v_cache)
+        dd.io.save("%s/lcache.h5" % path_to_cache, self._l_cache)
 
     def reset(self):
-
         self._curr = 0
 
     def __iter__(self):
@@ -62,14 +78,10 @@ class SingleMutationLoader(object):
             res = struct[mut.chain_id][mut.i]
 
             try:
-                view = self._v_cache[rec]
-                view.rotate(rot)
+                voxels = self._v_cache[(rec, rot)]
 
             except KeyError:
-                view = View(struct, res, num_voxels=20)
-                self._v_cache[rec] = view
-
-            data = view.voxels
+                voxels = self._v_cache[(rec, rot)] = get_4channel_voxels(struct, res, rot, 20)
 
             try:
                 labels = self._l_cache[rec]
@@ -82,13 +94,12 @@ class SingleMutationLoader(object):
                 # cp_a1, cp_b1, _ = rec.get_shells_cp(2.0, 4.0)
                 # cp_a2, cp_b2, _ = rec.get_shells_cp(4.0, 6.0)
                 # labels = [bfactor, hydphob, molweight, asa, cp_a1, cp_b1, cp_a2, cp_b2]
-                labels = [bfactor, asa]
+                labels = np.asarray([bfactor, asa])
 
                 self._l_cache[rec] = labels
 
             self._curr += 1
-
-            return data, np.asarray(labels)
+            return voxels, labels
         else:
             raise StopIteration
 
@@ -263,8 +274,10 @@ if __name__ == "__main__":
     training_set = [record for record in skempi_records if 1 <= record.group <= 4]
     validation_set = [record for record in skempi_records if record.group == 5]
 
-    loader_trn = SingleMutationLoader(training_set, augmentations)
-    loader_val = SingleMutationLoader(validation_set, augmentations)
+    loader_val = SingleMutationLoader(validation_set, [None], "3dcnn/data/val")
+    loader_val.dump()
+    loader_trn = SingleMutationLoader(training_set, augmentations, "3dcnn/data/train")
+    loader_trn.dump()
 
     net = CNN3dV1()
     opt = optim.Adamax(net.parameters(), lr=LR)
