@@ -19,7 +19,7 @@ try:
     bpx_paper_df = pd.read_excel(osp.join(BINDPROFX_DATA, 'all.xlsx'))
 except IOError as e:
     print("warning: %s" % e)
-    skempi_df = None
+    bpx_paper_df = None
 
 
 class MutList(object):
