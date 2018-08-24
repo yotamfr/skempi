@@ -15,7 +15,11 @@ BINDPROFX_DATA = "../data/XBindProfPaperData"
 BPX_PDB_PATH = "../data/XBindProfPaperData/pdbs"
 
 
-bpx_paper_df = pd.read_excel(osp.join(BINDPROFX_DATA, 'all.xlsx'))
+try:
+    bpx_paper_df = pd.read_excel(osp.join(BINDPROFX_DATA, 'all.xlsx'))
+except IOError as e:
+    print("warning: %s" % e)
+    skempi_df = None
 
 
 class MutList(object):
