@@ -212,13 +212,12 @@ class SkempiStruct(object):
         self.dist_mat = None
         self._profiles = {}
         self._alignments = {}
+        self._stride = None
         try:
             self._init_profiles()
+            self._init_stride(pdb_path)
         except IOError as e:
             print("warining: %s" % e)
-        self._stride = None
-        if pdb_path != "../data/pdbs_n":
-            self._init_stride(pdb_path)
 
     def __hash__(self):
         return hash((self.modelname, self.chains_a, self.chains_b))
