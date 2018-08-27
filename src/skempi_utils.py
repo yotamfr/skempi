@@ -2,10 +2,6 @@ import os
 import sys
 import pickle
 
-from Bio import SeqIO
-from Bio.Seq import Seq
-from Bio.SeqRecord import SeqRecord
-
 import numpy as np
 import pandas as pd
 import os.path as osp
@@ -83,8 +79,11 @@ class Mutation(object):
 
 class MSA(object):
     def __init__(self, pdb, chain):
-        self._msa = collection_msa.find_one({
-            "_id": "%s_%s" % (pdb, chain)})["alignment"]
+        uid = "%s_%s.aln" % (pdb, chain)
+        with open(osp.join("..", "data", "skempi_aln", uid), 'r') as f:
+            lines = f.readlines()
+        kvs = [[s for s in line.split(' ') if s] for line in lines]
+        self._msa = [(k.strip(), v.strip()) for k, v in kvs]
 
     def __getitem__(self, i):
         return self._msa[i]
@@ -96,7 +95,7 @@ class MSA(object):
             f.writelines(lines)
 
 
-class SkempiProfile(object):
+class Profile(object):
     def __init__(self, pdb, chain):
         uid = "%s_%s.prof" % (pdb, chain)
         df = pd.read_csv(osp.join("..", "data", "skempiprofiles", uid), sep=' ')
@@ -108,17 +107,17 @@ class SkempiProfile(object):
         return pos_dict[a]  ### + 0.05 * pos_dict['-']
 
 
-class Profile(object):
-    def __init__(self, pdb, chain):
-        uid = "%s_%s" % (pdb, chain)
-        doc = collection_msa.find_one({
-            "_id": uid})
-        assert doc is not None
-        self._profile = doc["profile"]
-
-    def __getitem__(self, t):
-        i, a = t
-        return self._profile[i][a]
+# class Profile(object):
+#     def __init__(self, pdb, chain):
+#         uid = "%s_%s" % (pdb, chain)
+#         doc = collection_msa.find_one({
+#             "_id": uid})
+#         assert doc is not None
+#         self._profile = doc["profile"]
+#
+#     def __getitem__(self, t):
+#         i, a = t
+#         return self._profile[i][a]
 
 
 class Stride(object):
@@ -127,8 +126,12 @@ class Stride(object):
         self._total = 0.0
         for i, row in stride_df.iterrows():
             d_row = row.to_dict()
+            try:
+                chain_id = d_row["Chain"]
+                res_i = int(d_row["Res"]) - 1
+            except ValueError as e:
+                continue
             self._total += (d_row["ASA_Chain"] - d_row["ASA"])
-            chain_id, res_i = d_row["Chain"], int(d_row["Res"]) - 1
             self._dict[(chain_id, res_i)] = d_row
 
     def __getitem__(self, t):
@@ -215,6 +218,7 @@ class SkempiStruct(object):
         self._stride = None
         try:
             self._init_profiles()
+            self._init_alignments()
             self._init_stride(pdb_path)
         except IOError as e:
             print("warining: %s" % e)
@@ -230,9 +234,10 @@ class SkempiStruct(object):
         return "<SkempiStruct %s_%s_%s>" % (self.modelname, self.chains_a, self.chains_b)
 
     def _init_profiles(self):
-        chains = self.chains
-        self._profiles = {c: SkempiProfile(self.pdb, c) for c in chains}
-        # self._alignments = {c: MSA(self.pdb, c) for c in chains}
+        self._profiles = {c: Profile(self.pdb, c) for c in self.chains}
+
+    def _init_alignments(self):
+        self._alignments = {c: MSA(self.pdb, c) for c in self.chains}
 
     def _init_stride(self, pdb_path=PDB_PATH):
         modelname = self.modelname
@@ -302,11 +307,11 @@ class SkempiStruct(object):
 
 
 def to_fasta(skempi_entries, out_file):
-    sequences = []
+    lines = []
     for entry in skempi_entries:
-        for chain in entry:
-            sequences.append(SeqRecord(Seq(chain.seq), chain.id))
-    SeqIO.write(sequences, open(out_file, 'w+'), "fasta")
+        lines.extend([">%s\n%s\n" % (chain.id, chain.seq) for i, chain in enumerate(entry)])
+    with open(out_file, "w+") as f:
+        f.writelines(lines)
 
 
 def delta_asa(struct, mut):
@@ -368,8 +373,8 @@ def load_skempi_structs(pdb_path, compute_dist_mat=False, carbons_only=True):
     return skempi_structs
 
 
-def parse_mutations(mutations_str, reverse=False):
-    mutations = [Mutation(s) for s in mutations_str.split(',')]
+def parse_mutations(mutations_str, reverse=False, sep=','):
+    mutations = [Mutation(s) for s in mutations_str.split(sep)]
     if reverse:
         return [reversed(mut) for mut in mutations]
     else:
@@ -405,6 +410,22 @@ def records_to_xy(skempi_records, load_negative=False):
     return data
 
 
+def skempi_group_from_row(row):
+    pdb, ca, cb = row.Protein.split('_')
+    groups = ["%s_%s_%s" % (pdb, ca, cb) in g for g in [G1, G2, G3, G4, G5]]
+    assert sum(groups) <= 1
+    return 0 if sum(groups) == 0 else (groups.index(True) + 1)
+
+
+def skempi_record_from_row(row, pdb_path='../data/pdbs'):
+    t = row.Protein.split('_')
+    struct = SkempiStruct(*t, pdb_path=pdb_path)
+    mutations = parse_mutations(row["Mutation(s)_cleaned"])
+    ddg = row.DDG
+    group = skempi_group_from_row(row)
+    return SkempiRecord(struct, mutations, ddg, group)
+
+
 def consurf():
     skempi_entries = list(load_skempi_structs(PDB_PATH).values())
     to_fasta(skempi_entries, "../data/skempi.fas")
@@ -431,15 +452,11 @@ def consurf():
 
 
 if __name__ == "__main__":
-    pdb, ca, cb = t = (u'1CSE', u'E', u'I')
-    struct = SkempiStruct(*t, pdb_path='../data/pdbs')
-    mutations = parse_mutations("LI38G")
-    groups = ["%s_%s_%s" % (pdb, ca, cb) in g for g in [G1, G2, G3, G4, G5]]
-    assert sum(groups) <= 1
-    group = 3
-    r = SkempiRecord(struct, mutations, ddg=2.529, group=3)
-    r.features(True)
-    print(bindprofx(r))
-    rr = reversed(r)
-    rr.features(True)
-    print(bindprofx(rr))
+    for i in tqdm(range(len(skempi_df))):
+        row = skempi_df.loc[i]
+        r = skempi_record_from_row(row, pdb_path="../data/pdbs_n")
+        r.features(True)
+        print(bindprofx(r))
+        rr = reversed(r)
+        rr.features(True)
+        print(bindprofx(rr))

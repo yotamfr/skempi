@@ -13,13 +13,17 @@ def delta_sasa(modelname, chainA, chainB, pdb_path):
     df_complex = parse_stride(proc0.stdout)
     args = [STRIDE_EXE, '%s/%s.pdb' % (pdb_path, modelname), '-r%s' % (chainA,)]
     proc1 = subprocess.Popen(args, stdout=subprocess.PIPE)
-    df_A = parse_stride(proc1.stdout)
+    df_a = parse_stride(proc1.stdout)
     args = [STRIDE_EXE, '%s/%s.pdb' % (pdb_path, modelname), '-r%s' % (chainB,)]
     proc2 = subprocess.Popen(args, stdout=subprocess.PIPE)
-    df_B = parse_stride(proc2.stdout)
-    assert np.all(np.array(list(df_A["Res"]) + list(df_B["Res"])) == np.array(list(df_complex["Res"])))
-    assert np.any(np.array(list(df_A["ASA"]) + list(df_B["ASA"])) != np.array(list(df_complex["ASA"])))
-    df_complex.loc[:, "ASA_Chain"] = np.array(list(df_A["ASA"]) + list(df_B["ASA"]))
+    df_b = parse_stride(proc2.stdout)
+    ress_a, ress_b = list(df_a.Res), list(df_b.Res)
+    ress = np.asarray(sorted(df_complex.Res))
+    asa_a, asa_b = list(df_a.ASA), list(df_b.ASA)
+    asa = np.asarray(list(df_complex.ASA))
+    assert np.all(ress == np.asarray(sorted(ress_a + ress_b)))
+    assert np.any(np.asarray(asa_a + asa_b) != asa)
+    df_complex.loc[:, "ASA_Chain"] = np.asarray(asa_a + asa_b)
     return df_complex
 
 

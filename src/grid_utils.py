@@ -7,14 +7,14 @@ from scipy.ndimage.filters import gaussian_filter
 
 
 def get_4channel_voxels(struct, res, R, nv=20):
-    c1 = get_3d_voxels_around_res(struct, res, rot=R, num_voxels=nv, atom_types=['C'])
-    c2 = get_3d_voxels_around_res(struct, res, rot=R, num_voxels=nv, atom_types=['O'])
-    c3 = get_3d_voxels_around_res(struct, res, rot=R, num_voxels=nv, atom_types=['N'])
-    c4 = get_3d_voxels_around_res(struct, res, rot=R, num_voxels=nv, atom_types=['S'])
+    c1 = get_3d_voxels_around_res(struct, res, rot=R, num_voxels=nv, atom_types=['C'], vdw=1.7)
+    c2 = get_3d_voxels_around_res(struct, res, rot=R, num_voxels=nv, atom_types=['O'], vdw=1.52)
+    c3 = get_3d_voxels_around_res(struct, res, rot=R, num_voxels=nv, atom_types=['N'], vdw=1.55)
+    c4 = get_3d_voxels_around_res(struct, res, rot=R, num_voxels=nv, atom_types=['S'], vdw=1.8)
     return np.stack((c1, c2, c3, c4), axis=0)
 
 
-def get_3d_voxels_around_res(struct, res, rot=None, num_voxels=20, atom_types=['C']):
+def get_3d_voxels_around_res(struct, res, rot=None, num_voxels=20, atom_types=['C'], vdw=1.7):
     center = res.ca.coord
     r = num_voxels // 2
     X = np.asarray([a.coord for a in struct.atoms if a.type in atom_types])
@@ -27,7 +27,7 @@ def get_3d_voxels_around_res(struct, res, rot=None, num_voxels=20, atom_types=['
     y_indx = np.intersect1d(np.where(X[:, 1] > -r), np.where(X[:, 1] < r))
     z_indx = np.intersect1d(np.where(X[:, 2] > -r), np.where(X[:, 2] < r))
     indx = reduce(np.intersect1d, [x_indx, y_indx, z_indx])
-    return voxelize(X[indx, :], num_voxels, smooth=True)
+    return voxelize(X[indx, :], num_voxels, smooth=vdw/3.0)
 
 
 def rot(axis, theta):
@@ -68,15 +68,14 @@ class Rotation(object):
         return hash((tuple(axis), theta))
 
 
-def voxelize(X, num_voxels, smooth=True):
+def voxelize(X, num_voxels, smooth=0.0):
     n = num_voxels
     voxels = np.zeros((n + 1, n + 1, n + 1))
     for coord in X:
         i, j, k = np.floor(coord + n / 2)
         voxels[int(i), int(j), int(k)] = 1
-    if smooth:
-        voxels[:, :, :] = gaussian_filter(voxels,sigma=0.6, order=0, output=None, mode='reflect', cval=0.0, truncate=4.0)
-        voxels[:, :, :] *= 1000
+    if smooth != 0.0:
+        voxels[:, :, :] = gaussian_filter(voxels, sigma=smooth, order=0, output=None, mode='reflect', cval=0.0, truncate=4.0)
     return voxels
 
 
