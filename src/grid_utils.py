@@ -6,20 +6,24 @@ from scipy.linalg import expm, norm
 from scipy.ndimage.filters import gaussian_filter
 
 
+VDW = {'C': 1.7, 'O': 1.52, 'N': 1.55, 'S': 1.8}
+
+
 def get_4channel_voxels(struct, res, R, nv=20):
-    c1 = get_3d_voxels_around_res(struct, res, rot=R, num_voxels=nv, atom_types=['C'], vdw=1.7)
-    c2 = get_3d_voxels_around_res(struct, res, rot=R, num_voxels=nv, atom_types=['O'], vdw=1.52)
-    c3 = get_3d_voxels_around_res(struct, res, rot=R, num_voxels=nv, atom_types=['N'], vdw=1.55)
-    c4 = get_3d_voxels_around_res(struct, res, rot=R, num_voxels=nv, atom_types=['S'], vdw=1.8)
+    c1 = get_3d_voxels_around_res(struct, res, rot=R, num_voxels=nv, atom_types=['C'], rad=1.7)
+    c2 = get_3d_voxels_around_res(struct, res, rot=R, num_voxels=nv, atom_types=['O'], rad=1.52)
+    c3 = get_3d_voxels_around_res(struct, res, rot=R, num_voxels=nv, atom_types=['N'], rad=1.55)
+    c4 = get_3d_voxels_around_res(struct, res, rot=R, num_voxels=nv, atom_types=['S'], rad=1.8)
     return np.stack((c1, c2, c3, c4), axis=0)
 
 
-def get_3d_voxels_around_res(struct, res, rot=None, num_voxels=20, atom_types=['C'], vdw=1.7):
+def get_3d_voxels_around_res(struct, res, rot=None, num_voxels=20, atom_types=['C'], rad=1.7):
+    smooth = rad/3.0
     center = res.ca.coord
     r = num_voxels // 2
     X = np.asarray([a.coord for a in struct.atoms if a.type in atom_types])
     if len(X) == 0:
-        return voxelize([], num_voxels, smooth=True)
+        return voxelize([], num_voxels, smooth=smooth)
     X -= center
     if rot is not None:
         X = rot(X)
@@ -27,7 +31,7 @@ def get_3d_voxels_around_res(struct, res, rot=None, num_voxels=20, atom_types=['
     y_indx = np.intersect1d(np.where(X[:, 1] > -r), np.where(X[:, 1] < r))
     z_indx = np.intersect1d(np.where(X[:, 2] > -r), np.where(X[:, 2] < r))
     indx = reduce(np.intersect1d, [x_indx, y_indx, z_indx])
-    return voxelize(X[indx, :], num_voxels, smooth=vdw/3.0)
+    return voxelize(X[indx, :], num_voxels, smooth=smooth)
 
 
 def rot(axis, theta):

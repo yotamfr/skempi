@@ -417,9 +417,9 @@ def skempi_group_from_row(row):
     return 0 if sum(groups) == 0 else (groups.index(True) + 1)
 
 
-def skempi_record_from_row(row, pdb_path='../data/pdbs'):
+def skempi_record_from_row(row, pdb_path='../data/pdbs', carbons_only=False):
     t = row.Protein.split('_')
-    struct = SkempiStruct(*t, pdb_path=pdb_path)
+    struct = SkempiStruct(*t, pdb_path=pdb_path, carbons_only=carbons_only)
     mutations = parse_mutations(row["Mutation(s)_cleaned"])
     ddg = row.DDG
     group = skempi_group_from_row(row)
