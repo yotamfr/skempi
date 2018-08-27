@@ -190,9 +190,10 @@ class SkempiRecord(object):
 
     def __reversed__(self):
         wt = self.struct
+        co = self.struct.carbons_only
         mutations = [reversed(mut) for mut in self.mutations]
         modelname, ws = apply_modeller(wt, self.mutations)
-        mutant = SkempiStruct(modelname, wt.chains_a, wt.chains_b, pdb_path=ws)
+        mutant = SkempiStruct(modelname, wt.chains_a, wt.chains_b, pdb_path=ws, carbons_only=co)
         return SkempiRecord(mutant, mutations, -self.ddg, self.group, not self.is_minus)
 
     def __str__(self):
@@ -206,12 +207,13 @@ class SkempiStruct(object):
         cs = list(chains_a + chains_b)
         self.struct = parse_pdb(modelname, open(self.path, 'r'), dict(zip(cs, cs)))
         self.modelname = modelname
+        self.carbons_only = carbons_only
         self.chains_a = chains_a
         self.chains_b = chains_b
         self.res_chain_to_atom_indices = {}
         self.atom_indices_to_chain_res = {}
         self.atoms = []
-        self.init_dictionaries(carbons_only)
+        self.init_dictionaries()
         self.dist_mat = None
         self._profiles = {}
         self._alignments = {}
@@ -260,7 +262,8 @@ class SkempiStruct(object):
     def chains(self):
         return self.struct.chains
 
-    def init_dictionaries(self, carbons_only):
+    def init_dictionaries(self):
+        carbons_only = self.carbons_only
         for chain in self.struct:
             for res_i, res in enumerate(chain):
                 for atom in res:
