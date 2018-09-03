@@ -22,7 +22,7 @@ except ImportError:
 
 USE_CUDA = True
 BATCH_SIZE = 32
-LR = 0.01
+LR = 0.0001
 
 rotations_x = [rot_x(r * 2 * math.pi) for r in np.arange(0, .99, .25)]
 rotations_y = [rot_y(r * 2 * math.pi) for r in np.arange(0, .99, .25)]
@@ -32,15 +32,23 @@ augmentations = rotations_x + rotations_y + rotations_z
 
 class SingleMutationLoader(object):
 
-    def __init__(self, dataframe, augmentations, vcache):
+    def __init__(self, dataframe, augmentations, vcache, debug):
         self._records = []
         self._curr = 0
         for _, row in dataframe.iterrows():
             for rot in augmentations:
                 self._records.append([rot, row])
         self._vcache = vcache
+        if debug:
+            self.p = np.zeros(len(self))
+        else:
+            self.p = np.random.permutation(len(self))
 
-    def reset(self):
+    def reset(self, debug=False):
+        if debug:
+            self.p = np.zeros(len(self))
+        else:
+            self.p = np.random.permutation(len(self))
         self._curr = 0
 
     def __iter__(self):
@@ -48,10 +56,11 @@ class SingleMutationLoader(object):
 
     def next(self):
         if self._curr < len(self._records):
-            rot, row = self._records[self._curr]
+            ix = self.p[self._curr]
             try:
-                voxels1, voxels2, ddg = self._vcache[self._curr]
+                voxels1, voxels2, ddg = self._vcache[ix]
             except KeyError:
+                rot, row = self._records[ix]
                 rec1 = skempi_record_from_row(row)
                 rec2 = reversed(rec1)
                 assert rec1.ddg == -rec2.ddg
@@ -67,7 +76,7 @@ class SingleMutationLoader(object):
                 voxels1 = get_4channel_voxels(struct1, res1, rot, 20)
                 voxels2 = get_4channel_voxels(struct2, res2, rot, 20)
                 ddg = rec1.ddg
-                self._vcache[self._curr] = (voxels1, voxels2, ddg)
+                self._vcache[ix] = (voxels1, voxels2, ddg)
             self._curr += 1
             return voxels1, voxels2, [ddg]
         else:
@@ -115,23 +124,25 @@ class CNN3dV1(nn.Module):    # https://bmcbioinformatics.biomedcentral.com/artic
         super(CNN3dV1, self).__init__()
 
         self.features = nn.Sequential(
-            nn.Conv3d(4, 100, kernel_size=(3, 3, 3)),
+            nn.Conv3d(4, 8, kernel_size=(5, 5, 5)),
             nn.ReLU(inplace=True),
             nn.Dropout(dropout),
-            nn.Conv3d(100, 200, kernel_size=(3, 3, 3)),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout),
-            nn.MaxPool3d((2, 2, 2)),
-            nn.Conv3d(200, 400, kernel_size=(3, 3, 3)),
+            nn.Conv3d(8, 16, kernel_size=(1, 1, 1)),
             nn.ReLU(inplace=True),
             nn.Dropout(dropout),
             nn.MaxPool3d((2, 2, 2)),
+            nn.Conv3d(16, 32, kernel_size=(3, 3, 3)),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
+            nn.MaxPool3d((2, 2, 2)),
+            nn.Conv3d(32, 64, kernel_size=(1, 1, 1)),
+            nn.ReLU(inplace=True),
         )
         self.info = nn.Sequential(
-            nn.Linear(10800, 1000),
+            nn.Linear(1728, 500),
             nn.ReLU(inplace=True),
             nn.Dropout(dropout),
-            nn.Linear(1000, 100),
+            nn.Linear(500, 100),
             nn.ReLU(inplace=True),
             nn.Dropout(dropout),
         )
@@ -189,9 +200,11 @@ def train(model, opt, adalr, batch_generator, length_xy):
 
     for i, (x1, x2, y) in enumerate(batch_generator):
 
+        x = torch.cat([x1, x2], 0)
         opt.zero_grad()
-        y1 = model(x1)
-        y2 = model(x2)
+        out = model(x)
+        y1 = out[:len(y), :]
+        y2 = out[len(y):, :]
         y_hat = y1 - y2
         loss = get_loss(y_hat, y)
         adalr.update(loss.item())
@@ -249,6 +262,8 @@ def add_arguments(parser):
                         help="Sets the seed for generating random number.")
     parser.add_argument("-d", "--device", type=str, choices=["0", "1", "2", "3"],
                         default="0", help="Choose a device to run on.")
+    parser.add_argument("-g", '--debug', action='store_true', default=True,
+                        help="Run in debug mode.")
 
 
 if __name__ == "__main__":
@@ -268,11 +283,11 @@ if __name__ == "__main__":
     cache_trn = Cache(client['skempi']['siamese_train'], serialize=serialize, deserialize=deserialize)
     cache_val = Cache(client['skempi']['siamese_valid'], serialize=serialize, deserialize=deserialize)
 
-    loader_trn = SingleMutationLoader(training_set, augmentations, vcache=cache_trn)
-    loader_val = SingleMutationLoader(validation_set, [None], vcache=cache_val)
+    loader_trn = SingleMutationLoader(training_set, augmentations, vcache=cache_trn, debug=False)
+    loader_val = SingleMutationLoader(validation_set, [None], vcache=cache_val, debug=False)
 
     net = CNN3dV1()
-    opt = optim.SGD(net.parameters(), lr=LR, momentum=0.9, nesterov=True)
+    opt = optim.Adam(net.parameters(), lr=LR)
 
     ckptpath = args.out_dir
 
@@ -319,5 +334,5 @@ if __name__ == "__main__":
             'opt': opt.state_dict()
         }, loss, "skempi", ckptpath)
 
-        loader_val.reset()
-        loader_trn.reset()
+        loader_val.reset(False)
+        loader_trn.reset(False)

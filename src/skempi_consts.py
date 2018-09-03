@@ -6,9 +6,11 @@ PDB_PATH = "../data/pdbs"
 
 try:
     skempi_df = pd.read_excel(osp.join('../data', 'SKEMPI_1.1.xlsx'))
+    skempi2_df = pd.read_csv(osp.join('../data', 'skempi_v2.csv'))
 except IOError as e:
     print("warning: %s" % e)
     skempi_df = None
+    skempi2_df = None
 
 from pymongo import MongoClient
 

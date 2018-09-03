@@ -1,6 +1,7 @@
 import os
 import os.path as osp
 import requests
+import numpy as np
 
 AA_dict = {
     "ALA": "A",
@@ -27,7 +28,7 @@ AA_dict = {
     "VAL": "V",
 }
 
-AAA = {val:key for key, val in AA_dict.iteritems()}
+AAA_dict = {val: key for key, val in AA_dict.iteritems()}
 
 UNKNOWN = 'UNK'
 
@@ -35,10 +36,11 @@ UNKNOWN = 'UNK'
 UNHANDLED = {'HETSYN', 'COMPND', 'SOURCE', 'KEYWDS', 'EXPDTA', 'AUTHOR', 'REVDAT', 'JRNL', 'SIGATM',
              'REMARK', 'DBREF', 'SEQADV', 'HET', 'HETATM', 'HETNAM', 'FORMUL', 'HELIX', 'CAVEAT',
              'SHEET', 'SITE', 'LINK', 'CISPEP', 'SITE', 'CRYST1', 'MTRIX1', 'MTRIX2', 'MTRIX3',
-             'ORIGX1', 'ORIGX2', 'ORIGX3', 'SSBOND', 'MODRES', 'SPRSDE', 'ANISOU', 'ANISOU10000',
+             'ORIGX1', 'ORIGX2', 'ORIGX3', 'SSBOND', 'MODRES', 'SPRSDE', 'ANISOU', 'ANISOU10000', 'DBREF1',
              'HETATM13247', 'HETATM13248', 'HETATM13249', 'HETATM13250', 'HETATM13256', 'HETATM13258',
              'HETATM13251', 'HETATM13252', 'HETATM13253', 'HETATM13254', 'HETATM13255', 'HETATM13257',
-             'SCALE1', 'SCALE2', 'SCALE3', 'SEQRES', 'CONECT', 'MASTER', 'END'}
+             'SCALE1', 'SCALE2', 'SCALE3', 'SEQRES', 'CONECT', 'MASTER', 'END', 'NUMMDL', 'MDLTYP',
+             'SPLIT', 'HYDBND', 'SIGUIJ', 'DBREF2', 'SLTBRG'}  # TODO: Handle Multiple Models
 
 
 amino_acids = "ARNDCQEGHILKMFPSTWYV"
@@ -61,6 +63,7 @@ def download_pdb(pdb, outdir="../data/pdbs_n"):
 class Atom(object):
 
     def __init__(self, name, num, residue, x, y, z, occup, temp):
+        assert name != ''
         self.num = num
         self.name = name
         self.temp = temp
@@ -109,13 +112,10 @@ class Atom(object):
         occup = self.occup
         temp = self.temp
         (x, y, z) = self._coord
-        # return '{typ: <6}{0: >5}  {1: <4}{2: <4}{3: <1}{4: >4}    ' \
-        #        '{5:8.3f}{6:8.3f}{7:8.3f}'\
-        #     .format(atom_num, atom_name, AAA[aa], chain_id, res_num, x, y, z, typ='ATOM')
         return '{typ: <6}{0: >5}  {1: <4}{2: <4}{3: <1}{4: >4}    ' \
                '{5:8.3f}{6:8.3f}{7:8.3f}{8:6.2f}{9:6.2f}          ' \
                ' {10: <4}'\
-            .format(atom_num, atom_name, AAA[aa], chain_id, res_num, x, y, z, occup, temp, self.type, typ='ATOM')
+            .format(atom_num, atom_name, AAA_dict[aa], chain_id, res_num, x, y, z, occup, temp, self.type, typ='ATOM')
 
 
 class Residue(object):
@@ -128,12 +128,10 @@ class Residue(object):
 
     @property
     def ca(self):
-        return self.get_atom_by_name("CA")
-
-    def get_atom_by_name(self, name):
-        atom = [a for a in self.atoms if a.name == name]
-        assert len(atom) >= 1
-        return atom[0]
+        calpha = [a for a in self.atoms if a.name == "CA"]
+        if len(calpha) == 0:
+            return None
+        return calpha[0]
 
     def __iter__(self):
         for atom in self.atoms:
@@ -142,8 +140,11 @@ class Residue(object):
     def __getitem__(self, i):
         return self.atoms[i]
 
+    def __hash__(self):
+        return hash((self.chain, self.num))
+
     def __str__(self):
-        return "<Residue %s>" % AAA[self.name]
+        return "<Residue %s>" % AAA_dict[self.name]
 
 
 class Chain(object):
@@ -158,7 +159,10 @@ class Chain(object):
             yield res
 
     def __getitem__(self, i):
-        return self.residues[i]
+        try:
+            return self.residues[i]
+        except IndexError:
+            print(i, str(self), len(self.residues))
 
     def __str__(self):
         return "<Chain %s %d>" % (self.id, len(self))
@@ -175,16 +179,20 @@ class Chain(object):
     def id(self):
         return "%s_%s" % (self.pdb, self.chain_id)
 
+    def __hash__(self):
+        return hash(self.id)
+
     def __len__(self):
-        return len(self.seq)
+        return len(self.residues)
 
 
 class PDB(object):
 
-    def __init__(self, modelname, chains=[], chain_dict={}):
+    def __init__(self, modelname, atoms, chains=[], chain_dict={}):
         self._id_to_ix = {}
         self._id = modelname
         self._chains = []
+        self._atoms = atoms
         for _, c in enumerate(chains):
             if len(chain_dict) > 0:
                 if c.chain_id not in chain_dict:
@@ -201,12 +209,19 @@ class PDB(object):
         return {c.chain_id: c for c in self._chains}
 
     @property
+    def atoms(self):
+        return self._atoms
+
+    @property
     def pdb(self):
         return self._id
 
     def __iter__(self):
         for chain in self._chains:
             yield chain
+
+    def __hash__(self):
+        return hash(self._id)
 
     def __getitem__(self, chain_id):
         return self._chains[self._id_to_ix[chain_id]]
@@ -221,15 +236,16 @@ class PDB(object):
             f.writelines(lines)
 
 
-def _handle_line(line, residues, chains, pdb, chain_id='', residue_num=0):
-
-    typ = line.strip().split(' ')[0]
+def _handle_line(line, atoms, residues, chains, pdb, chain_id='', residue_num=0):
 
     if not line:
-        return residues, chains, chain_id, residue_num
+        return atoms, residues, chains, chain_id, residue_num
+    typ = line.strip().split(' ')[0]
 
     if typ in UNHANDLED:
         pass
+    elif typ == 'MODEL':
+        raise NotImplementedError("PDB: %s contains more than one model" % pdb)
     elif typ == 'HEADER':
         pass
     elif typ == 'TITLE':
@@ -258,9 +274,9 @@ def _handle_line(line, residues, chains, pdb, chain_id='', residue_num=0):
             occup, temp = 1.00, 00.00
         x, y, z = float(x), float(y), float(z)
         try:
-            res_name = AA_dict[res_name[-3:]]
+            res_name = AA_dict[res_name[-3:].strip()]
         except KeyError:
-            return residues, chains, chain_id, res_num
+            return atoms, residues, chains, chain_id, res_num   # TODO : Not Amino Acid- Handle!
 
         atom = Atom(atom_name, atom_num, None, x, y, z, occup, temp)
 
@@ -273,33 +289,35 @@ def _handle_line(line, residues, chains, pdb, chain_id='', residue_num=0):
 
         atom.res = res
         residue_num = res_num
+        atoms.append(atom)
 
     elif typ == 'TER':
         assert chain_id
         chain = Chain(pdb, chain_id, residues)
-        for res in residues: res.chain = chain
+        for res in residues:
+            res.chain = chain
         chains.append(chain)
         residues = []
 
     else:
-        raise ValueError("Unidentified row type: %s" % typ)
+        raise ValueError("Unidentified type: '%s', PDB: %s" % (typ, pdb))
 
-    return residues, chains, chain_id, residue_num
+    return atoms, residues, chains, chain_id, residue_num
 
 
 def parse_pdb(pdb, fd, chain_dict={}):
 
     line = fd.readline()
 
-    residues, chains, chain_id, res_num = _handle_line(line, [], [], pdb)
+    atoms, residues, chains, chain_id, res_num = _handle_line(line, [], [], [], pdb)
 
     while line:
 
         line = fd.readline()
 
-        residues, chains, chain_id, res_num = _handle_line(line, residues, chains, pdb, chain_id, res_num)
+        atoms, residues, chains, chain_id, res_num = _handle_line(line, atoms, residues, chains, pdb, chain_id, res_num)
 
-    return PDB(pdb, chains, chain_dict)
+    return PDB(pdb, atoms, [c for c in chains if len(c) > 0], chain_dict)
 
 
 def parse_pdb2(pdb, path):
@@ -308,9 +326,8 @@ def parse_pdb2(pdb, path):
 
 if __name__ == "__main__":
     import os.path as osp
-    pdb = "1A4Y"
-    PDB_PATH = "../data/pdbs"
-    fd = open(osp.join(PDB_PATH, "%s.pdb" % pdb), 'r')
+    pdb = "4nos"
+    fd = open(osp.join("..", "data", "%s.pdb" % pdb), 'r')
     struct = parse_pdb(pdb, fd)
-    struct.to_pdb("../data/1a4y.pdb")
+    # struct.to_pdb("../data/%s.pdb" % pdb)
     print(struct.pdb)
