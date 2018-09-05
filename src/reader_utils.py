@@ -45,7 +45,7 @@ class PdbLoader(object):
         pbar = tqdm(range(self.num_iter), desc="loading data...")
         while i < self.num_iter:
             try:
-                self.reader.next()
+                self.reader.read()
                 pbar.update(1)
                 i += 1
             except StopIteration:
@@ -83,7 +83,7 @@ class PdbReader(object):
 
     def reset(self):
         self._pdb_ix = -1
-        self._struct = None
+        self.struct = None
         self.load_next_struct()
 
     def read_pdb(self, pdb):
@@ -94,7 +94,7 @@ class PdbReader(object):
         if self._pdb_ix == len(self._p):
             raise StopIteration
         try:
-            self._struct = self.read_pdb(self.curr_pdb)
+            self.struct = self.read_pdb(self.curr_pdb)
             self._chain_ix = 0
             self._res_ix = 0
         except (KeyError, NotImplementedError, AssertionError):
@@ -106,44 +106,38 @@ class PdbReader(object):
 
     @property
     def curr_chain(self):
-        return self._struct._chains[self._chain_ix]
+        return self.struct._chains[self._chain_ix]
 
-    def next(self):
+    def read(self):
 
         if self._res_ix + self._step < len(self.curr_chain):
             self._res_ix += self._step
-        elif self._chain_ix + 1 < len(self._struct._chains):
+        elif self._chain_ix + 1 < len(self.struct._chains):
             self._chain_ix += 1
             self._res_ix = 0
         else:
             self.load_next_struct()
-            return self.next()
+            return self.read()
 
-        struct = self._struct
         res = self.curr_chain[self._res_ix]
 
         if res.ca is None:
-            return self.next()
+            return self.read()
 
-        return E.submit(self.func, self.queue, struct, res, self.rotations)
-
-    def __next__(self):
-        return self.next()
-
-    def __iter__(self):
-        return self
+        E.submit(self.func, self.queue, self.struct, res, self.rotations)
 
 
-def non_blocking_producer(queue, struct, res, rotations):
-    descriptors = get_cp_descriptors(struct, res)
+def non_blocking_producer(queue, struct, res, rotations, nv=20):
+    atoms = select_atoms_in_box(struct.atoms, res.ca.coord, nv)
+    descriptors = get_cp_descriptors_around_res(atoms, res)
     for rot in rotations:
-        voxels = get_4channel_voxels(struct, res, rot)
+        voxels = get_4channel_voxels_around_res(atoms, res, rot, nv=nv)
         queue.put([voxels, descriptors])
 
 
 if __name__ == "__main__":
     augmentations = get_xyz_rotations(.25)
-    loader = PdbLoader(non_blocking_producer, DEBUG_SET, 1000, augmentations)
+    loader = PdbLoader(non_blocking_producer, TRAINING_SET, 1000, augmentations)
     pbar = tqdm(range(len(loader)), desc="processing data...")
     for _, (inp, tgt) in enumerate(loader):
         pbar.update(1)

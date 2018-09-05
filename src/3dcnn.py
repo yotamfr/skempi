@@ -225,7 +225,7 @@ if __name__ == "__main__":
         if epoch < num_epochs - 1 and epoch % args.eval_every != 0:
             continue
 
-        loss, _ = evaluate(net, batch_generator(loader_val), len(loader_val))
+        loss = evaluate(net, batch_generator(loader_val), len(loader_val))
 
         if VERBOSE:
             print("[Epoch %d/%d] (Validation Loss: %.6f" % (epoch + 1, num_epochs, loss))
