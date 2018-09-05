@@ -4,6 +4,7 @@ from functools import reduce
 from scipy.linalg import expm, norm
 from scipy.ndimage.filters import gaussian_filter
 
+from pdb_utils import *
 from aaindex import *
 
 VDW = {'C': 1.7, 'O': 1.52, 'N': 1.55, 'S': 1.8}
@@ -14,35 +15,63 @@ def ones(struct, atom_types):
 
 
 def get_4channel_voxels(struct, res, R, nv=20):
-    c1 = get_3d_voxels_around_res(struct, ones, res, rot=R, num_voxels=nv, atom_types=['C'])
-    c2 = get_3d_voxels_around_res(struct, ones, res, rot=R, num_voxels=nv, atom_types=['N'])
-    c3 = get_3d_voxels_around_res(struct, ones, res, rot=R, num_voxels=nv, atom_types=['O'])
-    c4 = get_3d_voxels_around_res(struct, ones, res, rot=R, num_voxels=nv, atom_types=['S'])
-    return np.stack((c1, c2, c3, c4), axis=0)
+    c1 = get_3d_voxels_around_res(struct, res, ones, rot=R, num_voxels=nv, atom_types=['C'])
+    c2 = get_3d_voxels_around_res(struct, res, ones, rot=R, num_voxels=nv, atom_types=['N'])
+    c3 = get_3d_voxels_around_res(struct, res, ones, rot=R, num_voxels=nv, atom_types=['O'])
+    c4 = get_3d_voxels_around_res(struct, res, ones, rot=R, num_voxels=nv, atom_types=['S'])
+    return np.stack([c1, c2, c3, c4], axis=0)
 
 
-def hydrophobicity(struct, atom_types):
-    return np.asarray([ARGP820101[a.res.name] for a in struct.atoms if a.type in atom_types])
-def molweight(struct, atom_types):
-    return np.asarray([FASG760101[a.res.name] for a in struct.atoms if a.type in atom_types])
-def bfactor(struct, atom_types):
-    return np.asarray([a.temp for a in struct.atoms if a.type in atom_types])
+# def hydrophobicity(struct, atom_types):
+#     return np.asarray([ARGP820101[a.res.name] for a in struct.atoms if a.type in atom_types])
+#
+#
+# def molweight(struct, atom_types):
+#     return np.asarray([FASG760101[a.res.name] for a in struct.atoms if a.type in atom_types])
+#
+#
+# def bfactor(struct, atom_types):
+#     return np.asarray([a.temp for a in struct.atoms if a.type in atom_types])
+#
+#
+# def get_feature_maps(struct, res, R, nv=20):
+#     ch = get_3d_voxels_around_res(struct, res, hydrophobicity, rot=R, num_voxels=nv, atom_types=['C', 'N', 'O', 'S'])
+#     cm = get_3d_voxels_around_res(struct, res, molweight, rot=R, num_voxels=nv, atom_types=['C', 'N', 'O', 'S'])
+#     cb = get_3d_voxels_around_res(struct, res, bfactor, rot=R, num_voxels=nv, atom_types=['C', 'N', 'O', 'S'])
+#     return np.stack([ch, cm, cb], axis=0)
+#
+#
+# def get_voxels(struct, res, R, nv=20):
+#     ca = get_4channel_voxels(struct, res, R, nv)
+#     cf = get_feature_maps(struct, res, R, nv)
+#     return ca, cf
 
 
-def get_feature_maps(struct, res, R, nv=20):
-    ch = get_3d_voxels_around_res(struct, hydrophobicity, res, rot=R, num_voxels=nv, atom_types=['C', 'N', 'O', 'S'])
-    cm = get_3d_voxels_around_res(struct, molweight, res, rot=R, num_voxels=nv, atom_types=['C', 'N', 'O', 'S'])
-    cb = get_3d_voxels_around_res(struct, bfactor, res, rot=R, num_voxels=nv, atom_types=['C', 'N', 'O', 'S'])
-    return np.stack([ch, cm, cb], axis=0)
+def get_descriptors_in_shell(struct, res, descriptor_from_residues, inner, outer, atom_types=['C']):
+    atoms = np.asarray([a for a in struct.atoms if a.type in atom_types])
+    X = np.asarray([a.coord for a in atoms])
+    center = res.ca.coord
+    X -= center
+    indx_in = np.where(X[:, 0] ** 2 + X[:, 1] ** 2 + X[:, 2] ** 2 >= inner ** 2)
+    indx_out = np.where(X[:, 0] ** 2 + X[:, 1] ** 2 + X[:, 2] ** 2 <= outer ** 2)
+    indx = reduce(np.intersect1d, [indx_in, indx_out])
+    residues = set([a.res for a in atoms[indx]])
+    return descriptor_from_residues(res, residues)
 
 
-def get_voxels(struct, res, R, nv=20):
-    ca = get_4channel_voxels(struct, res, R, nv)
-    cf = get_feature_maps(struct, res, R, nv)
-    return ca, cf
+def get_chemical_potentials(center, neighbors, C=BASU010101):
+    i, w, A = center.ix, center.name, center.chain.chain_id
+    indices = [(res.ix, res.name) for res in neighbors if res.ix != i or res.chain.chain_id != A]
+    return {m: sum([C[(r, m)] - C[(r, w)] for j, r in indices]) for m in amino_acids}
 
 
-def get_3d_voxels_around_res(struct, values_from_struct, res, rot=None, num_voxels=20, atom_types=['C'], rad=0.0):
+def get_cp_descriptors(struct, res):
+    cp46 = get_descriptors_in_shell(struct, res, get_chemical_potentials, 4.0, 6.0, atom_types=['C'])
+    cp68 = get_descriptors_in_shell(struct, res, get_chemical_potentials, 6.0, 8.0, atom_types=['C'])
+    return np.concatenate([cp46.values(), cp68.values()], axis=0)
+
+
+def get_3d_voxels_around_res(struct, res, values_from_struct, rot=None, num_voxels=20, atom_types=['C'], rad=0.0):
     smooth = rad/3.0
     center = res.ca.coord
     r = num_voxels // 2
@@ -53,10 +82,10 @@ def get_3d_voxels_around_res(struct, values_from_struct, res, rot=None, num_voxe
     X -= center
     if rot is not None:
         X = rot(X)
-    x_indx = np.intersect1d(np.where(X[:, 0] > -r), np.where(X[:, 0] < r))
-    y_indx = np.intersect1d(np.where(X[:, 1] > -r), np.where(X[:, 1] < r))
-    z_indx = np.intersect1d(np.where(X[:, 2] > -r), np.where(X[:, 2] < r))
-    indx = reduce(np.intersect1d, [x_indx, y_indx, z_indx])
+    indx_x = np.intersect1d(np.where(X[:, 0] > -r), np.where(X[:, 0] < r))
+    indx_y = np.intersect1d(np.where(X[:, 1] > -r), np.where(X[:, 1] < r))
+    indx_z = np.intersect1d(np.where(X[:, 2] > -r), np.where(X[:, 2] < r))
+    indx = reduce(np.intersect1d, [indx_x, indx_y, indx_z])
     return voxelize(X[indx, :], y[indx], num_voxels, smooth=smooth)
 
 
@@ -98,6 +127,13 @@ class Rotation(object):
         return hash((tuple(axis), theta))
 
 
+def get_xyz_rotations(circle_frac=0.25):
+    rotations_x = [rot_x(r * 2 * math.pi) for r in np.arange(0, .99, circle_frac)]
+    rotations_y = [rot_y(r * 2 * math.pi) for r in np.arange(0, .99, circle_frac)]
+    rotations_z = [rot_z(r * 2 * math.pi) for r in np.arange(0, .99, circle_frac)]
+    return rotations_x + rotations_y + rotations_z
+
+
 def voxelize(X, y, num_voxels, smooth=0.0):
     n = num_voxels
     voxels = np.zeros((n + 1, n + 1, n + 1))
@@ -109,27 +145,27 @@ def voxelize(X, y, num_voxels, smooth=0.0):
     return voxels
 
 
-class View(object):
-
-    def __init__(self, struct, center_res, num_voxels=20, atom_types=['C', 'O', 'N', 'S']):
-        center = center_res.center
-        r = num_voxels // 2
-        X = np.asarray([a.coord for a in struct.atoms if a.type in atom_types])
-        Y = np.asarray([a.type for a in struct.atoms if a.type in atom_types])
-        X -= center
-        indx = np.where(X[:, 0]**2 + X[:, 1]**2 + X[:, 2]**2 <= r**2)
-        self.S = X[indx, :][0]
-        self.types = Y[indx]
-        self.atom_types = atom_types
-        self.nv = num_voxels
-
-    def rotate(self, R):
-        self.S = R(self.S)
-
-    @property
-    def voxels(self):
-        channels = [voxelize(self.S[self.types == c, :], self.nv, True) for c in self.atom_types]
-        return np.stack(channels, axis=0)
+# class View(object):
+#
+#     def __init__(self, struct, center_res, num_voxels=20, atom_types=['C', 'O', 'N', 'S']):
+#         center = center_res.center
+#         r = num_voxels // 2
+#         X = np.asarray([a.coord for a in struct.atoms if a.type in atom_types])
+#         Y = np.asarray([a.type for a in struct.atoms if a.type in atom_types])
+#         X -= center
+#         indx = np.where(X[:, 0]**2 + X[:, 1]**2 + X[:, 2]**2 <= r**2)
+#         self.S = X[indx, :][0]
+#         self.types = Y[indx]
+#         self.atom_types = atom_types
+#         self.nv = num_voxels
+#
+#     def rotate(self, R):
+#         self.S = R(self.S)
+#
+#     @property
+#     def voxels(self):
+#         channels = [voxelize(self.S[self.types == c, :], self.nv, True) for c in self.atom_types]
+#         return np.stack(channels, axis=0)
 
 
 if __name__ == "__main__":

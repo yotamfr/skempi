@@ -83,10 +83,40 @@ class MSA(object):
         with open(osp.join("..", "data", "skempi_aln", uid), 'r') as f:
             lines = f.readlines()
         kvs = [[s for s in line.split(' ') if s] for line in lines]
-        self._msa = [(k.strip(), v.strip()) for k, v in kvs]
+        msa = [(k.strip(), v.strip()) for k, v in kvs]
+        self.ali = np.asarray([list(seq) for _, seq in msa])
+        df = pd.read_csv("../data/iPTMs1.txt", sep=" ")
+        self.iPTMs1 = {}
+        for r1, r2 in comb(amino_acids, 2):
+            self.iPTMs1[(r1, r2)] = df[df.AA == r1][r2].values[0]
+            self.iPTMs1[(r2, r1)] = df[df.AA == r2][r1].values[0]
+            self.iPTMs1[(r1, r1)] = df[df.AA == r1][r1].values[0]
+            self.iPTMs1[(r2, r2)] = df[df.AA == r2][r2].values[0]
+
+    def M(self, r1, r2):
+        return self.iPTMs1[(r1, r2)]
+
+    def N(self, aa, i):
+        return sum(self.ali[:, i] == aa)
+
+    def Np(self, aa, i, params):
+        a, b, c = params
+        return a + b * self.n_gap(i) + c * self.E(aa, i)
+
+    def E(self, aa, i):
+        return sum([self.P(aa, i) * self.M(r, aa) for r in amino_acids])
+
+    def P(self, aa, i):
+        return self.N(aa, i) / float(len(self))
+
+    def n_gap(self, i):
+        return self.N('-', i)
+
+    def __len__(self):
+        return len(self.ali)
 
     def __getitem__(self, i):
-        return self._msa[i]
+        return self.ali[i]
 
     def to_fasta(self, pth):
         lines = [">%s\n%s\n" % (uid if i == 0 else "SEQ%d" % i, seq)
@@ -159,6 +189,11 @@ class SkempiRecord(object):
         eis = [EI(mut.m, mut.w, struct.get_profile(mut.chain_id), mut.i, mat) for mut in self.mutations]
         return np.sum(eis)
 
+    def get_evo(self):
+        struct = self.struct
+        scores = [EVO(struct.get_alignment(mut.chain_id), mut) for mut in self.mutations]
+        return np.sum(scores)
+
     def get_shells_cp(self, inner, outer, mat=BASU010101):
         cps = [CP(mut, self.struct, mat, inner, outer) for mut in self.mutations]
         return np.sum(cps, axis=0)
@@ -167,6 +202,12 @@ class SkempiRecord(object):
         return agg([delta_asa(self.struct, mut) for mut in self.mutations])
 
     def features(self, free_mem=True):
+        try:
+            self.struct.init_profiles()
+            self.struct.init_alignments()
+            self.struct.init_stride()
+        except IOError as e:
+            print("warining: %s" % e)
         if self.struct.dist_mat is None:
             self.struct.compute_dist_mat()
         log_mutations = np.log(len(self.mutations))
@@ -175,10 +216,11 @@ class SkempiRecord(object):
         molweight = get_descriptor(self.mutations, FASG760101)
         tota_asa = self.get_asa()
         ei = self.get_ei()
+        evo = self.get_evo()
         cp_a1, cp_b1, _ = self.get_shells_cp(2.0, 4.0)
         cp_a2, cp_b2, _ = self.get_shells_cp(4.0, 6.0)
         if free_mem: self.struct.free_dist_mat()
-        feats = [log_mutations, bfactor, hydphob, molweight, tota_asa, ei, cp_a1, cp_b1, cp_a2, cp_b2]
+        feats = [log_mutations, bfactor, hydphob, molweight, tota_asa, ei, evo, cp_a1, cp_b1, cp_a2, cp_b2]
         return np.asarray(feats)
 
     def get_bfactor(self, agg=np.min, pdb_path="../data/pdbs_n"):  # obtain wt b-factor
@@ -215,15 +257,9 @@ class SkempiStruct(object):
         self.atoms = []
         self.init_dictionaries()
         self.dist_mat = None
-        self._profiles = {}
-        self._alignments = {}
+        self._profiles = None
+        self._alignments = None
         self._stride = None
-        try:
-            self._init_profiles()
-            self._init_alignments()
-            self._init_stride(pdb_path)
-        except IOError as e:
-            print("warining: %s" % e)
 
     def __hash__(self):
         return hash((self.modelname, self.chains_a, self.chains_b))
@@ -235,17 +271,23 @@ class SkempiStruct(object):
     def __str__(self):
         return "<SkempiStruct %s_%s_%s>" % (self.modelname, self.chains_a, self.chains_b)
 
-    def _init_profiles(self):
+    def init_profiles(self):
+        if self._profiles is not None:
+            return
         self._profiles = {c: Profile(self.pdb, c) for c in self.chains}
 
-    def _init_alignments(self):
+    def init_alignments(self):
+        if self._alignments is not None:
+            return
         self._alignments = {c: MSA(self.pdb, c) for c in self.chains}
 
-    def _init_stride(self, pdb_path=PDB_PATH):
+    def init_stride(self):
+        if self._stride is not None:
+            return
         modelname = self.modelname
         ca, cb = self.chains_a, self.chains_b
         pth = osp.join('stride', '%s.out' % modelname)
-        stride.main(modelname, ca, cb, pdb_path)
+        stride.main(modelname, ca, cb, self.path)
         self._stride = Stride(pd.read_csv(pth))
 
     def get_profile(self, chain_id):
@@ -351,6 +393,13 @@ def get_descriptor(mutations, mat, agg=np.mean):    # MolWeight:FASG760101, Hydr
 
 def EI(m, w, P, i, B):
     return sum([P[(i, a)] * (B[(a, m)] - B[(a, w)]) for a in amino_acids])
+
+
+def EVO(ali, mut, a=25, b=15, c=5):
+    i, w, m = mut.i, mut.w, mut.m
+    nom = ali.N(m, i) + ali.Np(m, i, (a, b, c))
+    denom = ali.N(w, i) + ali.Np(w, i, (a, b, c))
+    return -np.log(nom / denom)
 
 
 def save_object(obj, filename):
@@ -462,4 +511,4 @@ if __name__ == "__main__":
         print(bindprofx(r))
         rr = reversed(r)
         rr.features(True)
-        print(bindprofx(rr))
+        # print(bindprofx(rr))

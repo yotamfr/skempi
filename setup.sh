@@ -26,6 +26,7 @@ pip install sklearn
 pip install pymongo
 pip install cogent
 pip install requests
+pip install futures
 
 pip install theano
 conda install mkl-service

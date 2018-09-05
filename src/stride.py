@@ -7,14 +7,14 @@ import pandas as pd
 STRIDE_EXE = '../stride/stride'
 
 
-def delta_sasa(modelname, chainA, chainB, pdb_path):
-    args = [STRIDE_EXE, '%s/%s.pdb' % (pdb_path, modelname), '-r%s%s' % (chainA, chainB)]
+def delta_sasa(modelname, chainA, chainB, path_to_pdb):
+    args = [STRIDE_EXE, path_to_pdb, '-r%s%s' % (chainA, chainB)]
     proc0 = subprocess.Popen(args, stdout=subprocess.PIPE)
     df_complex = parse_stride(proc0.stdout)
-    args = [STRIDE_EXE, '%s/%s.pdb' % (pdb_path, modelname), '-r%s' % (chainA,)]
+    args = [STRIDE_EXE, path_to_pdb, '-r%s' % (chainA,)]
     proc1 = subprocess.Popen(args, stdout=subprocess.PIPE)
     df_a = parse_stride(proc1.stdout)
-    args = [STRIDE_EXE, '%s/%s.pdb' % (pdb_path, modelname), '-r%s' % (chainB,)]
+    args = [STRIDE_EXE, path_to_pdb, '-r%s' % (chainB,)]
     proc2 = subprocess.Popen(args, stdout=subprocess.PIPE)
     df_b = parse_stride(proc2.stdout)
     ress_a, ress_b = list(df_a.Res), list(df_b.Res)

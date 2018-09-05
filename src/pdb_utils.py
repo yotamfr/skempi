@@ -133,6 +133,10 @@ class Residue(object):
             return None
         return calpha[0]
 
+    @property
+    def ix(self):
+        return self.num - 1
+
     def __iter__(self):
         for atom in self.atoms:
             yield atom

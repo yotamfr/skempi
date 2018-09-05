@@ -7,7 +7,6 @@ from torch import optim
 from tempfile import gettempdir
 from scipy.stats import pearsonr
 
-from pymongo import MongoClient
 from bson.binary import Binary
 import pickle
 
@@ -22,15 +21,13 @@ LR = 0.0001
 
 def batch_generator(loader, batch_size=BATCH_SIZE):
 
-    def prepare_batch(data1, data2, labels):
+    def prepare_batch(data1, data2):
         dat_var1 = Variable(torch.FloatTensor(data1))
         dat_var2 = Variable(torch.FloatTensor(data2))
-        lbl_var = Variable(torch.FloatTensor(labels))
         if USE_CUDA:
             dat_var1 = dat_var1.cuda()
             dat_var2 = dat_var2.cuda()
-            lbl_var = lbl_var.cuda()
-        return dat_var1, dat_var2, lbl_var
+        return dat_var1, dat_var2
     stop = False
     while not stop:
         batch = []
@@ -42,8 +39,8 @@ def batch_generator(loader, batch_size=BATCH_SIZE):
                 break
         if len(batch) == 0:
             break
-        dat1, dat2, lbl = zip(*batch)
-        yield prepare_batch(dat1, dat2, lbl)
+        inputs, labels = zip(*batch)
+        yield prepare_batch(inputs, labels)
 
 
 class CNN3dV1(nn.Module):    # https://bmcbioinformatics.biomedcentral.com/articles/10.1186/s12859-017-1702-0#Sec28
@@ -70,40 +67,31 @@ class CNN3dV1(nn.Module):    # https://bmcbioinformatics.biomedcentral.com/artic
             nn.Linear(1728, 500),
             nn.ReLU(inplace=True),
             nn.Dropout(dropout),
-            nn.Linear(500, 100),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout),
-        )
-        self.regressor = nn.Sequential(
-            nn.Linear(100, 10),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout),
-            nn.Linear(10, 1)
+            nn.Linear(500, 40),
         )
 
     def forward(self, x):
         x = self.features(x)
         x = x.view(len(x), -1)
         x = self.info(x)
-        x = self.regressor(x)
         return x
 
 
 def get_loss(y_hat, y):
-    loss = (y - y_hat).pow(2).sum() / y.size(0)
-    return loss
+    if USE_CUDA:
+        return nn.MSELoss().cuda()(y_hat, y)
+    else:
+        return nn.MSELoss()(y_hat, y)
 
 
 def evaluate(model, batch_generator, length_xy, batch_size=BATCH_SIZE):
     model.eval()
     pbar = tqdm(total=length_xy, desc="calculation...")
     err, i = 0, 0
-    preds = np.zeros((length_xy, 1))
-    truth = np.zeros((length_xy, 1))
-    for i, (x1, x2, y) in enumerate(batch_generator):
-        y1 = model(x1)
-        y2 = model(x2)
-        y_hat = y1 - y2
+    preds = np.zeros((length_xy, 40))
+    truth = np.zeros((length_xy, 40))
+    for i, (x, y) in enumerate(batch_generator):
+        y_hat = model(x)
         loss = get_loss(y_hat, y)
         err += loss.item()
         start = i * batch_size
@@ -111,11 +99,10 @@ def evaluate(model, batch_generator, length_xy, batch_size=BATCH_SIZE):
         preds[start:end, :] = y_hat.data.cpu().numpy()
         truth[start:end, :] = y.data.cpu().numpy()
         pbar.update(len(y))
-        cor, _ = pearsonr(preds[:end, :], truth[:end, :])
         e = err / (i + 1)
-        pbar.set_description("Validation Loss:%.4f, Perasonr: %.4f" % (e, cor))
+        pbar.set_description("Validation Loss:%.6f" % (e,))
     pbar.close()
-    return e, cor
+    return e
 
 
 def train(model, opt, adalr, batch_generator, length_xy):
@@ -126,58 +113,54 @@ def train(model, opt, adalr, batch_generator, length_xy):
 
     err = 0
 
-    for i, (x1, x2, y) in enumerate(batch_generator):
+    for i, (x, y) in enumerate(batch_generator):
 
-        x = torch.cat([x1, x2], 0)
         opt.zero_grad()
-        out = model(x)
-        y1 = out[:len(y), :]
-        y2 = out[len(y):, :]
-        y_hat = y1 - y2
+        y_hat = model(x)
         loss = get_loss(y_hat, y)
         adalr.update(loss.item())
         err += loss.item()
         loss.backward()
         opt.step()
         lr, e = adalr.lr, err/(i + 1)
-        pbar.set_description("Training Loss:%.4f, LR: %.4f" % (e, lr))
+        pbar.set_description("Training Loss:%.6f, LR: %.6f" % (e, lr))
         pbar.update(len(y))
 
     pbar.close()
 
 
-def serialize(obj):
-    return Binary(pickle.dumps(obj, protocol=2))
-
-
-def deserialize(bin_obj):
-    return pickle.loads(bin_obj)
-
-
-class Cache(object):
-
-    def __init__(self, collection, serialize=lambda x: x, deserialize=lambda x: x):
-        self.db = collection
-        self.serialize = serialize
-        self.deserialize = deserialize
-
-    def __setitem__(self, key, item):
-        self.db.update_one({"_id": hash(key)}, {"$set": {"data": self.serialize(item)}}, upsert=True)
-
-    def __getitem__(self, key):
-        load = self.deserialize
-        c = self.db.count({"_id": hash(key)})
-        if c == 0:
-            raise KeyError(key)
-        elif c == 1:
-            return load(self.db.find_one({"_id": hash(key)})["data"])
-        else:
-            raise ValueError("found more than one result for: '%s'" % key)
+# def serialize(obj):
+#     return Binary(pickle.dumps(obj, protocol=2))
+#
+#
+# def deserialize(bin_obj):
+#     return pickle.loads(bin_obj)
+#
+#
+# class Cache(object):
+#
+#     def __init__(self, collection, serialize=lambda x: x, deserialize=lambda x: x):
+#         self.db = collection
+#         self.serialize = serialize
+#         self.deserialize = deserialize
+#
+#     def __setitem__(self, key, item):
+#         self.db.update_one({"_id": hash(key)}, {"$set": {"data": self.serialize(item)}}, upsert=True)
+#
+#     def __getitem__(self, key):
+#         load = self.deserialize
+#         c = self.db.count({"_id": hash(key)})
+#         if c == 0:
+#             raise KeyError(key)
+#         elif c == 1:
+#             return load(self.db.find_one({"_id": hash(key)})["data"])
+#         else:
+#             raise ValueError("found more than one result for: '%s'" % key)
 
 
 def add_arguments(parser):
-    parser.add_argument("--mongo_url", type=str, default='mongodb://localhost:27017/',
-                        help="Supply the URL of MongoDB")
+    # parser.add_argument("--mongo_url", type=str, default='mongodb://localhost:27017/',
+    #                     help="Supply the URL of MongoDB")
     parser.add_argument('-r', '--resume', default='', type=str, metavar='PATH',
                         help='path to latest checkpoint (default: none)')
     parser.add_argument("-e", "--eval_every", type=int, default=1,
@@ -203,65 +186,56 @@ if __name__ == "__main__":
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     os.environ["CUDA_VISIBLE_DEVICES"] = args.device
 
-    rotations_x = [rot_x(r * 2 * math.pi) for r in np.arange(0, .99, .25)]
-    rotations_y = [rot_y(r * 2 * math.pi) for r in np.arange(0, .99, .25)]
-    rotations_z = [rot_z(r * 2 * math.pi) for r in np.arange(0, .99, .25)]
-    augmentations = rotations_x + rotations_y + rotations_z
+    loader_trn = PdbLoader(non_blocking_producer, TRAINING_SET, 20000, get_xyz_rotations(.25))
+    loader_val = PdbLoader(non_blocking_producer, VALIDATION_SET, 20000, [None])
 
-    reader = PdbWindowReader(get_4channel_voxels, TRAINING_SET, [None], step=10)
+    net = CNN3dV1()
+    opt = optim.Adam(net.parameters(), lr=LR)
 
-    loader_trn = PdbWindowReader(get_4channel_voxels, TRAINING_SET, augmentations, step=10)
-    loader_val = PdbWindowReader(get_4channel_voxels, VALIDATION_SET, [None], step=10)
+    ckptpath = args.out_dir
 
-    for key, val in tqdm(loader_trn, desc="processed"):
-        pass
-    # net = CNN3dV1()
-    # opt = optim.Adam(net.parameters(), lr=LR)
-    #
-    # ckptpath = args.out_dir
-    #
-    # model_summary(net)
-    #
-    # init_epoch = 0
-    # num_epochs = args.num_epochs
-    #
-    # # optionally resume from a checkpoint
-    # if args.resume:
-    #     if os.path.isfile(args.resume):
-    #         print("=> loading checkpoint '%s'" % args.resume)
-    #         checkpoint = torch.load(args.resume, map_location=lambda storage, loc: storage)
-    #         init_epoch = checkpoint['epoch']
-    #         net.load_state_dict(checkpoint['net'])
-    #         opt.load_state_dict(checkpoint['opt'])
-    #     else:
-    #         print("=> no checkpoint found at '%s'" % args.resume)
-    #
-    # adalr = AdaptiveLR(opt, LR, num_iterations=1000)
-    #
-    # # Move models to GPU
-    # if USE_CUDA:
-    #     net = net.cuda()
-    # if USE_CUDA and args.resume:
-    #     optimizer_cuda(opt)
-    #
-    # for epoch in range(init_epoch, num_epochs):
-    #
-    #     train(net, opt, adalr, batch_generator(loader_trn), len(loader_trn))
-    #
-    #     if epoch < num_epochs - 1 and epoch % args.eval_every != 0:
-    #         continue
-    #
-    #     loss, _ = evaluate(net, batch_generator(loader_val), len(loader_val))
-    #
-    #     if VERBOSE:
-    #         print("[Epoch %d/%d] (Validation Loss: %.4f" % (epoch + 1, num_epochs, loss))
-    #
-    #     save_checkpoint({
-    #         'lr': adalr.lr,
-    #         'epoch': epoch,
-    #         'net': net.state_dict(),
-    #         'opt': opt.state_dict()
-    #     }, loss, "skempi", ckptpath)
-    #
-    #     loader_val.reset(False)
-    #     loader_trn.reset(False)
+    model_summary(net)
+
+    init_epoch = 0
+    num_epochs = args.num_epochs
+
+    # optionally resume from a checkpoint
+    if args.resume:
+        if os.path.isfile(args.resume):
+            print("=> loading checkpoint '%s'" % args.resume)
+            checkpoint = torch.load(args.resume, map_location=lambda storage, loc: storage)
+            init_epoch = checkpoint['epoch']
+            net.load_state_dict(checkpoint['net'])
+            opt.load_state_dict(checkpoint['opt'])
+        else:
+            print("=> no checkpoint found at '%s'" % args.resume)
+
+    adalr = AdaptiveLR(opt, LR, num_iterations=10000)
+
+    # Move models to GPU
+    if USE_CUDA:
+        net = net.cuda()
+    if USE_CUDA and args.resume:
+        optimizer_cuda(opt)
+
+    for epoch in range(init_epoch, num_epochs):
+
+        train(net, opt, adalr, batch_generator(loader_trn), len(loader_trn))
+
+        if epoch < num_epochs - 1 and epoch % args.eval_every != 0:
+            continue
+
+        loss, _ = evaluate(net, batch_generator(loader_val), len(loader_val))
+
+        if VERBOSE:
+            print("[Epoch %d/%d] (Validation Loss: %.6f" % (epoch + 1, num_epochs, loss))
+
+        save_checkpoint({
+            'lr': adalr.lr,
+            'epoch': epoch,
+            'net': net.state_dict(),
+            'opt': opt.state_dict()
+        }, loss, "skempi", ckptpath)
+
+        loader_val.reset()
+        loader_trn.reset()
