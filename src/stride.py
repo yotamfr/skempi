@@ -7,7 +7,7 @@ import pandas as pd
 STRIDE_EXE = '../stride/stride'
 
 
-def delta_sasa(modelname, chainA, chainB, path_to_pdb):
+def delta_sasa(chainA, chainB, path_to_pdb):
     args = [STRIDE_EXE, path_to_pdb, '-r%s%s' % (chainA, chainB)]
     proc0 = subprocess.Popen(args, stdout=subprocess.PIPE)
     df_complex = parse_stride(proc0.stdout)
@@ -46,10 +46,10 @@ def parse_stride(out):
 def main(*args, **kwargs):
     if not os.path.exists('./stride'):
         os.makedirs('./stride')
-    modelname, chainA, chainB, pdb_path = args
-    delta_sasa(modelname, chainA, chainB, pdb_path).to_csv("./stride/%s.out" % modelname, index=False)
+    pdb_path, chainA, chainB, out_path  = args
+    delta_sasa(chainA, chainB, pdb_path).to_csv(out_path, index=False)
 
 
 if __name__ == "__main__":
-    modelname, chainA, chainB, pdb_path = sys.argv[1:]
-    main(modelname, chainA, chainB, pdb_path)
+    pdb_path, chainA, chainB, out_path = sys.argv[1:]
+    main(out_path, chainA, chainB, pdb_path)

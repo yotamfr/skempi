@@ -1,30 +1,26 @@
 import os.path as osp
 import pandas as pd
 
-# PDB_PATH = "../data/pdbs_n"
+# from pymongo import MongoClient
+# mongo_url = "mongodb://localhost:27017/"
+# db_name = "prot2vec"
+# client = MongoClient(mongo_url)
+# db = client[db_name]
+# collection_msa = db.skempi_uniprot20
+
 PDB_PATH = "../data/pdbs"
 
 try:
     skempi_df = pd.read_excel(osp.join('../data', 'SKEMPI_1.1.xlsx'))
-    skempi2_df = pd.read_csv(osp.join('../data', 'skempi_v2.csv'))
+    skempi_df_v2 = pd.read_csv(osp.join('../data', 'skempi_v2.csv'))
 except IOError as e:
     print("warning: %s" % e)
     skempi_df = None
-    skempi2_df = None
+    skempi_df_v2 = None
 
-from pymongo import MongoClient
-
-mongo_url = "mongodb://localhost:27017/"
-db_name = "prot2vec"
-client = MongoClient(mongo_url)
-db = client[db_name]
-collection_msa = db.skempi_uniprot20
-# collection_msa = db.skempi_scop90
-# collection_msa = db.skempi_uniclust30
 
 NUM_GROUPS = 5
 
-MODELLER_CHAINS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 G1 = [
     "%s_%s_%s" % (s[:4], s[4], s[5].strip()) for s in

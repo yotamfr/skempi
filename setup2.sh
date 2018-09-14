@@ -13,6 +13,7 @@ source activate skempi2
 
 pip install -r requirements.txt
 
+pip install ipython notebook ipykernel
 python -m ipykernel install --user --name skempi2
 
 pip install cogent

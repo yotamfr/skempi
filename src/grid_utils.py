@@ -48,8 +48,7 @@ def get_4channel_voxels_around_res(atoms, res, R, nv=20):
 
 
 def select_atoms_in_box(atoms, center, r):
-    X = np.asarray([a.coord for a in atoms])
-    X -= center
+    X = np.asarray([a.coord for a in atoms]) - center
     indx_x = np.intersect1d(np.where(X[:, 0] >= -r), np.where(X[:, 0] <= r))
     indx_y = np.intersect1d(np.where(X[:, 1] >= -r), np.where(X[:, 1] <= r))
     indx_z = np.intersect1d(np.where(X[:, 2] >= -r), np.where(X[:, 2] <= r))
@@ -58,16 +57,14 @@ def select_atoms_in_box(atoms, center, r):
 
 
 def select_atoms_in_sphere(atoms, center, r):
-    X = np.asarray([a.coord for a in atoms])
-    X -= center
+    X = np.asarray([a.coord for a in atoms]) - center
     indx = np.where(X[:, 0] ** 2 + X[:, 1] ** 2 + X[:, 2] ** 2 <= r ** 2)
     return np.asarray(atoms)[indx]
 
 
 def get_descriptors_in_shell(atoms, res, descriptor_from_residues, inner, outer, atom_types=['C']):
     atoms = np.asarray([a for a in atoms if a.type in atom_types])
-    X = np.asarray([a.coord for a in atoms])
-    X -= res.ca.coord
+    X = np.asarray([a.coord for a in atoms]) - res.ca.coord
     indx_in = np.where(X[:, 0] ** 2 + X[:, 1] ** 2 + X[:, 2] ** 2 >= inner ** 2)
     indx_out = np.where(X[:, 0] ** 2 + X[:, 1] ** 2 + X[:, 2] ** 2 <= outer ** 2)
     indx = reduce(np.intersect1d, [indx_in, indx_out])
@@ -75,16 +72,70 @@ def get_descriptors_in_shell(atoms, res, descriptor_from_residues, inner, outer,
     return descriptor_from_residues(res, residues)
 
 
-def get_chemical_potentials(center, neighbors, C=BASU010101):
-    i, w, A = center.ix, center.name, center.chain.chain_id
-    indices = [(res.ix, res.name) for res in neighbors if res.ix != i or res.chain.chain_id != A]
-    return {m: sum([C[(r, m)] - C[(r, w)] for j, r in indices]) for m in amino_acids}
+def get_atoms_in_sphere_around_center(center, atoms, rad, atom_types=["C"]):
+    atoms = np.asarray([a for a in atoms if a.type in atom_types])
+    X = np.asarray([a.coord for a in atoms]) - center
+    indx = np.where(X[:, 0] ** 2 + X[:, 1] ** 2 + X[:, 2] ** 2 <= rad ** 2)
+    return atoms[indx]
+
+
+def get_atoms_in_shell_around_center(center, atoms, inner, outer, atom_types=["C"]):
+    assert outer > inner
+    atoms = np.asarray([a for a in atoms if a.type in atom_types])
+    X = np.asarray([a.coord for a in atoms]) - center
+    indx_inn = np.where(X[:, 0] ** 2 + X[:, 1] ** 2 + X[:, 2] ** 2 >= inner ** 2)
+    indx_out = np.where(X[:, 0] ** 2 + X[:, 1] ** 2 + X[:, 2] ** 2 <= outer ** 2)
+    indx = reduce(np.intersect1d, [indx_inn, indx_out])
+    return atoms[indx]
+
+
+def get_cp_in_shell_around_res(center_res, atoms, inner, outer, M=BASU010101, atom_types=["C"]):
+    i, w, A = center_res.ix, center_res.name, center_res.chain.chain_id
+    center = center_res.ca.coord
+    neighbors = get_atoms_in_shell_around_center(center, atoms, inner, outer, atom_types)
+    residues = set([a.res for a in neighbors])
+    indices_A = [(res.ix, res.name) for res in residues if res.chain.chain_id == A and res.ix != i]
+    indices_B = [(res.ix, res.name) for res in residues if res.chain.chain_id != A]
+    cp_A = dict([(m, sum([M[(r, m)] - M[(r, w)] for j, r in indices_A])) for m in amino_acids])
+    cp_B = dict([(m, sum([M[(r, m)] - M[(r, w)] for j, r in indices_B])) for m in amino_acids])
+    return cp_A, cp_B
+
+
+def get_cp_in_sphere_around_res(center_res, atoms, rad, M=BASU010101, atom_types=["C"]):
+    i, w, A = center_res.ix, center_res.name, center_res.chain.chain_id
+    center = center_res.ca.coord
+    neighbors = get_atoms_in_sphere_around_center(center, atoms, rad, atom_types)
+    residues = set([a.res for a in neighbors])
+    indices_A = [(res.ix, res.name) for res in residues if res.chain.chain_id == A and res.ix != i]
+    indices_B = [(res.ix, res.name) for res in residues if res.chain.chain_id != A]
+    cp_A = dict([(m, sum([M[(r, m)] - M[(r, w)] for j, r in indices_A])) for m in amino_acids])
+    cp_B = dict([(m, sum([M[(r, m)] - M[(r, w)] for j, r in indices_B])) for m in amino_acids])
+    return cp_A, cp_B
+
+
+def get_hse_in_sphere(center_res, atoms, rad, atom_types=["C"]):
+    if center_res.cb is None or center_res.ca is None:
+        return [], []
+    alpha = center_res.ca.coord
+    atoms = np.asarray([a for a in atoms if a.type in atom_types])
+    X = np.asarray([a.coord for a in atoms]) - alpha
+    indx = np.where(X[:, 0] ** 2 + X[:, 1] ** 2 + X[:, 2] ** 2 <= rad ** 2)
+    beta = np.asarray(center_res.cb.coord) - alpha
+    indx_up = np.where(np.dot(X, beta) / np.sqrt(sum(beta**2)) > 0)
+    indx_down = np.where(np.dot(X, beta) / np.sqrt(sum(beta**2)) < 0)
+    indx_up = reduce(np.intersect1d, [indx, indx_up])
+    indx_down = reduce(np.intersect1d, [indx, indx_down])
+    aas_up = set([a.res for a in atoms[indx_up]]) - {center_res}
+    aas_down = set([a.res for a in atoms[indx_down]]) - {center_res}
+    return aas_up, aas_down
 
 
 def get_cp_descriptors_around_res(atoms, res):
-    cp46 = get_descriptors_in_shell(atoms, res, get_chemical_potentials, 4.0, 6.0, atom_types=['C'])
-    cp68 = get_descriptors_in_shell(atoms, res, get_chemical_potentials, 6.0, 8.0, atom_types=['C'])
-    return np.concatenate([cp46.values(), cp68.values()], axis=0)
+    cp46A, cp46B = get_cp_in_shell_around_res(res, atoms, 4.0, 6.0)
+    cp68A, cp68B = get_cp_in_shell_around_res(res, atoms, 6.0, 8.0)
+    cp46 = [cp46A[m] + cp46B[m] for m in amino_acids]
+    cp68 = [cp68A[m] + cp68B[m] for m in amino_acids]
+    return np.concatenate([cp46, cp68], axis=0)
 
 
 def get_3d_voxels_around_res(atoms, res, values_from_atoms, rot=None, num_voxels=20, atom_types=['C'], vdw=0.0):

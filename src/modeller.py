@@ -1,8 +1,8 @@
 import os
 import sys
+import shutil
 from os import path as osp
 from glob import glob
-import shutil
 
 from pdb_utils import *
 
@@ -33,6 +33,8 @@ a.ending_model  = 1                # index of the last model
 a.make()                           # do comparative modeling
 
 """
+
+MODELLER_CHAINS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 
 def create_modeller_workspace(template, mutant, workspace):
@@ -70,7 +72,7 @@ class Template(object):
     @property
     def sequences(self):
         seqs = []
-        for c in self._struct.struct._chains:
+        for c in self._struct._chains:
             seqs.append((c.chain_id, [res.name for res in c]))
         return seqs
 
@@ -95,7 +97,7 @@ class Mutant(object):
     @property
     def sequences(self):
         seqs = {}
-        chains = self._struct.struct._chains
+        chains = self._struct._chains
         for c in chains:
             seqs[c.chain_id] = [res.name for res in c]
         for mut in self._mutations:
@@ -117,22 +119,24 @@ class Ali(object):
         return "%s\n%s" % (self.template, self.mutant)
 
 
-def apply_modeller(skempi_struct, mutations):
-    tmpl = Template(skempi_struct)
-    mutant = Mutant(skempi_struct, mutations)
+def apply_modeller(pdb_struct, mutations):
+    tmpl = Template(pdb_struct)
+    mutant = Mutant(pdb_struct, mutations)
     ws = "modeller/%s" % mutant.name
-    if not osp.exists(ws): os.makedirs(ws)
-    src1 = skempi_struct.path
     dst1 = osp.join(ws, "%s.pdb" % tmpl.name)
-    shutil.copy(src1, dst1)
+    if not osp.exists(ws):
+        os.makedirs(ws)
+    if not osp.exists(dst1):
+        pdb_struct.to_pdb(dst1)
     create_modeller_workspace(tmpl, mutant, ws)
     dst2 = osp.join(ws, "%s.pdb" % mutant.name)
-    if osp.exists(dst2): return mutant.name, ws
+    if osp.exists(dst2):
+        return mutant.name, ws
     cline = "cd %s; %s mutate-model.py" % (ws, sys.executable)
     assert os.WEXITSTATUS(os.system(cline)) == 0
     src2 = glob(osp.join(ws, "%s*.pdb" % mutant.name))[0]
     with open(src2, "r") as f:
-        ids = [c.chain_id for c in skempi_struct.struct]
+        ids = [c.chain_id for c in pdb_struct]
         chain_dict = dict(zip(MODELLER_CHAINS, ids))
         struct = parse_pdb(mutant.name, f, chain_dict)
         struct.to_pdb(dst2)

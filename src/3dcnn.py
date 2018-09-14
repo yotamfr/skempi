@@ -67,7 +67,7 @@ class CNN3dV1(nn.Module):    # https://bmcbioinformatics.biomedcentral.com/artic
             nn.Linear(1728, 500),
             nn.ReLU(inplace=True),
             nn.Dropout(dropout),
-            nn.Linear(500, 40),
+            nn.Linear(500, 20),
         )
 
     def forward(self, x):
@@ -78,18 +78,22 @@ class CNN3dV1(nn.Module):    # https://bmcbioinformatics.biomedcentral.com/artic
 
 
 def get_loss(y_hat, y):
+    # if USE_CUDA:
+    #     return nn.MSELoss().cuda()(y_hat, y)
+    # else:
+    #     return nn.MSELoss()(y_hat, y)
     if USE_CUDA:
-        return nn.MSELoss().cuda()(y_hat, y)
+        return nn.BCELoss().cuda()(y_hat, y)
     else:
-        return nn.MSELoss()(y_hat, y)
+        return nn.BCELoss()(y_hat, y)
 
 
 def evaluate(model, batch_generator, length_xy, batch_size=BATCH_SIZE):
     model.eval()
     pbar = tqdm(total=length_xy, desc="calculation...")
     err, i = 0, 0
-    preds = np.zeros((length_xy, 40))
-    truth = np.zeros((length_xy, 40))
+    preds = np.zeros((length_xy, 20))
+    truth = np.zeros((length_xy, 20))
     for i, (x, y) in enumerate(batch_generator):
         y_hat = model(x)
         loss = get_loss(y_hat, y)
@@ -172,7 +176,7 @@ def add_arguments(parser):
     parser.add_argument("-s", "--seed", type=int, default=9898,
                         help="Sets the seed for generating random number.")
     parser.add_argument("-d", "--device", type=str, choices=["0", "1", "2", "3"],
-                        default="0", help="Choose a device to run on.")
+                        default="2", help="Choose a device to run on.")
     parser.add_argument("-g", '--debug', action='store_true', default=True,
                         help="Run in debug mode.")
 
@@ -186,7 +190,7 @@ if __name__ == "__main__":
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     os.environ["CUDA_VISIBLE_DEVICES"] = args.device
 
-    loader_trn = PdbLoader(non_blocking_producer, TRAINING_SET, 20000, get_xyz_rotations(.25))
+    loader_trn = PdbLoader(non_blocking_producer, TRAINING_SET, 20000, get_xyz_rotations(.5))
     loader_val = PdbLoader(non_blocking_producer, VALIDATION_SET, 20000, [None])
 
     net = CNN3dV1()

@@ -234,7 +234,7 @@ class SkempiRecord(object):
         wt = self.struct
         co = self.struct.carbons_only
         mutations = [reversed(mut) for mut in self.mutations]
-        modelname, ws = apply_modeller(wt, self.mutations)
+        modelname, ws = apply_modeller(wt.struct, self.mutations)
         mutant = SkempiStruct(modelname, wt.chains_a, wt.chains_b, pdb_path=ws, carbons_only=co)
         return SkempiRecord(mutant, mutations, -self.ddg, self.group, not self.is_minus)
 
@@ -282,13 +282,18 @@ class SkempiStruct(object):
         self._alignments = {c: MSA(self.pdb, c) for c in self.chains}
 
     def init_stride(self):
-        if self._stride is not None:
-            return
-        modelname = self.modelname
-        ca, cb = self.chains_a, self.chains_b
-        pth = osp.join('stride', '%s.out' % modelname)
-        stride.main(modelname, ca, cb, self.path)
-        self._stride = Stride(pd.read_csv(pth))
+        ca = self.chains_a
+        cb = self.chains_b
+        pdb_struct = self.struct
+        modelname = pdb_struct.pdb
+        pdb_pth = osp.join('stride', modelname, '%s.pdb' % modelname)
+        out_pth = osp.join('stride', modelname, '%s.out' % modelname)
+        if not osp.exists(osp.dirname(pdb_pth)):
+            os.makedirs(osp.dirname(pdb_pth))
+        if not osp.exists(out_pth):
+            pdb_struct.to_pdb(pdb_pth)
+            stride.main(pdb_pth, ca, cb, out_pth)
+        self._stride = Stride(pd.read_csv(out_pth))
 
     def get_profile(self, chain_id):
         return self._profiles[chain_id]

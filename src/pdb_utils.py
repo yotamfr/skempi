@@ -43,9 +43,6 @@ UNHANDLED = {'HETSYN', 'COMPND', 'SOURCE', 'KEYWDS', 'EXPDTA', 'AUTHOR', 'REVDAT
              'SPLIT', 'HYDBND', 'SIGUIJ', 'DBREF2', 'SLTBRG'}  # TODO: Handle Multiple Models
 
 
-amino_acids = "ARNDCQEGHILKMFPSTWYV"
-
-
 def download_pdb(pdb, outdir="../data/pdbs_n"):
     assert osp.exists(outdir)
     print("downloading %s->%s" % (pdb, outdir))
@@ -134,6 +131,13 @@ class Residue(object):
         return calpha[0]
 
     @property
+    def cb(self):
+        cbeta = [a for a in self.atoms if a.name == "CB"]
+        if len(cbeta) == 0:
+            return None
+        return cbeta[0]
+
+    @property
     def ix(self):
         return self.num - 1
 
@@ -145,7 +149,7 @@ class Residue(object):
         return self.atoms[i]
 
     def __hash__(self):
-        return hash((self.chain, self.num))
+        return hash((self.chain, self.num, self.name))
 
     def __str__(self):
         return "<Residue %s>" % AAA_dict[self.name]

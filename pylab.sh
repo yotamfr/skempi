@@ -9,4 +9,4 @@ REMOTE_PORT=$3
 #ssh -N -f -L  ${LOCAL_PORT}:${REMOTE_HOST}:${REMOTE_PORT} yotamfra@nova.cs.tau.ac.il
 ssh -L  ${LOCAL_PORT}:${REMOTE_HOST}:${REMOTE_PORT} yotamfra@nova.cs.tau.ac.il
 
-# ./pylab.sh rack-jonathan-g04 8199 8888
+# bash pylab.sh rack-jonathan-g04 8199 8888
