@@ -101,7 +101,10 @@ class Mutant(object):
         for c in chains:
             seqs[c.chain_id] = [res.name for res in c]
         for mut in self._mutations:
+            if seqs[mut.chain_id][mut.i] != mut.w:
+                print(str(self._struct), str(mut), mut.i, AAA_dict[seqs[mut.chain_id][mut.i]], AAA_dict[mut.w])
             assert seqs[mut.chain_id][mut.i] == mut.w
+        for mut in self._mutations:
             seqs[mut.chain_id][mut.i] = mut.m
         return [(c, seqs[c.chain_id]) for c in chains]
 

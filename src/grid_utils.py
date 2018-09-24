@@ -90,24 +90,24 @@ def get_atoms_in_shell_around_center(center, atoms, inner, outer, atom_types=["C
 
 
 def get_cp_in_shell_around_res(center_res, atoms, inner, outer, M=BASU010101, atom_types=["C"]):
-    i, w, A = center_res.ix, center_res.name, center_res.chain.chain_id
+    i, w, A = center_res.index, center_res.name, center_res.chain.chain_id
     center = center_res.ca.coord
     neighbors = get_atoms_in_shell_around_center(center, atoms, inner, outer, atom_types)
     residues = set([a.res for a in neighbors])
-    indices_A = [(res.ix, res.name) for res in residues if res.chain.chain_id == A and res.ix != i]
-    indices_B = [(res.ix, res.name) for res in residues if res.chain.chain_id != A]
+    indices_A = [(res.index, res.name) for res in residues if res.chain.chain_id == A and res.index != i]
+    indices_B = [(res.index, res.name) for res in residues if res.chain.chain_id != A]
     cp_A = dict([(m, sum([M[(r, m)] - M[(r, w)] for j, r in indices_A])) for m in amino_acids])
     cp_B = dict([(m, sum([M[(r, m)] - M[(r, w)] for j, r in indices_B])) for m in amino_acids])
     return cp_A, cp_B
 
 
 def get_cp_in_sphere_around_res(center_res, atoms, rad, M=BASU010101, atom_types=["C"]):
-    i, w, A = center_res.ix, center_res.name, center_res.chain.chain_id
+    i, w, A = center_res.index, center_res.name, center_res.chain.chain_id
     center = center_res.ca.coord
     neighbors = get_atoms_in_sphere_around_center(center, atoms, rad, atom_types)
     residues = set([a.res for a in neighbors])
-    indices_A = [(res.ix, res.name) for res in residues if res.chain.chain_id == A and res.ix != i]
-    indices_B = [(res.ix, res.name) for res in residues if res.chain.chain_id != A]
+    indices_A = [(res.index, res.name) for res in residues if res.chain.chain_id == A and res.index != i]
+    indices_B = [(res.index, res.name) for res in residues if res.chain.chain_id != A]
     cp_A = dict([(m, sum([M[(r, m)] - M[(r, w)] for j, r in indices_A])) for m in amino_acids])
     cp_B = dict([(m, sum([M[(r, m)] - M[(r, w)] for j, r in indices_B])) for m in amino_acids])
     return cp_A, cp_B

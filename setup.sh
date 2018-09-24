@@ -8,22 +8,19 @@ conda install -p skempi2  pytorch torchvision cuda80 -c pytorch
 ### activate skempi2
 source activate skempi2
 conda --add channels salilab
-conda install modeller
+conda install -c salilab modeller
 pip install --upgrade pip
 
-conda config --add channels conda-forge
-conda install pytables
-conda install deepdish
-conda install hdf5
-
 pip install numpy
-pip install --no-binary pandas -I pandas
+pip install pandas
 pip install xlrd
+pip install tensoarboardX --upgrade
 pip install biopython==1.68
 pip install tqdm
 pip install scipy
 pip install sklearn
 pip install pymongo
+pip install sphinx
 pip install cogent
 pip install requests
 pip install futures
@@ -31,4 +28,5 @@ pip install futures
 pip install theano
 conda install mkl-service
 
-#python -m ipykernel install --user --name skempi
+#pip install ipython notebook
+#python -m ipykernel install --user --name skempi2

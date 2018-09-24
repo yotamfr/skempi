@@ -25,10 +25,10 @@ DEBUG_SET = ["1a4y", "1cse", "1kms", "1ddn", "4nos"]
 
 class PdbLoader(object):
 
-    def __init__(self, producer, list_of_pdbs, num_iterations, rotations=[None]):
-        self.reader = PdbReader(producer, list_of_pdbs, rotations, step=10, num_voxels=20)
+    def __init__(self, reader, num_iterations, num_augmentations=1):
+        self.reader = reader
         self.num_iter = num_iterations
-        self.num_aug = len(rotations)
+        self.num_aug = num_augmentations
         self.curr = 0
         self.load()
 
@@ -51,9 +51,15 @@ class PdbLoader(object):
     def next(self):
         if self.curr < len(self):
             ret = None
+            total_time_slept = 0.0
             while ret is None:
-                try: ret = self.reader.Q.pop()
-                except IndexError: time.sleep(0.1)
+                if total_time_slept > 60:
+                    raise StopIteration
+                try:
+                    ret = self.reader.Q.pop()
+                except IndexError:
+                    time.sleep(0.1)
+                    total_time_slept += 0.1
             self.curr += 1
             return ret
         else:
@@ -70,12 +76,12 @@ class PdbLoader(object):
 
 
 class PdbReader(object):
-    def __init__(self, producer, list_of_pdbs, rotations, repo=PDB_ZIP, step=10, num_voxels=20):
+    def __init__(self, producer, list_of_pdbs, rotations=[None], repo=PDB_ZIP, step=10, num_voxels=20):
         self._list_of_pdbs = list_of_pdbs
         self._p = np.random.permutation(len(list_of_pdbs))
         self._step = step
         self._repo = repo
-        self._nv = num_voxels
+        self.nv = num_voxels
         self.rotations = rotations
         self.func = producer
         self.Q = deque()
@@ -98,7 +104,7 @@ class PdbReader(object):
             self.struct = self.read_pdb(self.curr_pdb)
             self._chain_ix = 0
             self._res_ix = 0
-        except (KeyError, NotImplementedError, AssertionError):
+        except (KeyError, NotImplementedError):   # key errors are thrown by read_pdb
             self.load_next_struct()
 
     @property
@@ -120,17 +126,25 @@ class PdbReader(object):
             self.load_next_struct()
             return self.read()
 
+        struct = self.struct
         res = self.curr_chain[self._res_ix]
 
         if res.ca is None:
             return self.read()
 
-        nv = self._nv
-        struct = self.struct
-        self.E.submit(self.func, self.Q, struct, res, self.rotations, nv)
+        self.E.submit(self.func, self.Q, struct, res, self.rotations, self.nv)
 
 
-def non_blocking_producer(queue, struct, res, rotations, nv=20):
+def non_blocking_producer_v1(queue, struct, res, rotations, nv=20):
+    atoms = select_atoms_in_sphere(struct.atoms, res.ca.coord, nv)
+    ix = list(amino_acids).index(res.name)
+    descriptors = [int(i == ix) for i in range(len(amino_acids))]
+    for rot in rotations:
+        voxels = get_4channel_voxels_around_res(atoms, res, rot, nv=nv)
+        queue.appendleft([voxels, descriptors])
+
+
+def non_blocking_producer_v2(queue, struct, res, rotations, nv=20):
     atoms = select_atoms_in_sphere(struct.atoms, res.ca.coord, nv)
     descriptors = get_cp_descriptors_around_res(atoms, res)
     for rot in rotations:
@@ -138,9 +152,21 @@ def non_blocking_producer(queue, struct, res, rotations, nv=20):
         queue.appendleft([voxels, descriptors])
 
 
+def non_blocking_producer_v3(queue, struct, res, rotations, nv=20):
+    atoms = select_atoms_in_sphere(struct.atoms, res.ca.coord, nv)
+    descriptors1 = get_cp_descriptors_around_res(atoms, res)
+    ix = list(amino_acids).index(res.name)
+    descriptors2 = [int(i == ix) for i in range(len(amino_acids))]
+    for rot in rotations:
+        voxels = get_4channel_voxels_around_res(atoms, res, rot, nv=nv)
+        descriptors = np.concatenate([descriptors2, descriptors1], axis=0)
+        queue.appendleft([voxels, descriptors])
+
+
 if __name__ == "__main__":
-    augmentations = get_xyz_rotations(.25)
-    loader = PdbLoader(non_blocking_producer, DEBUG_SET, 5000, augmentations)
+    rotations = get_xyz_rotations(.25)
+    reader = PdbReader(non_blocking_producer_v2, TRAINING_SET, rotations, step=10, num_voxels=20)
+    loader = PdbLoader(reader, 50000, len(rotations))
     pbar = tqdm(range(len(loader)), desc="processing data...")
     for _, (inp, tgt) in enumerate(loader):
         pbar.update(1)

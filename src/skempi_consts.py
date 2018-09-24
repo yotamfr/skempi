@@ -1,22 +1,16 @@
 import os.path as osp
 import pandas as pd
+import numpy as np
 
-# from pymongo import MongoClient
-# mongo_url = "mongodb://localhost:27017/"
-# db_name = "prot2vec"
-# client = MongoClient(mongo_url)
-# db = client[db_name]
-# collection_msa = db.skempi_uniprot20
+PDB_PATH = osp.join("..", "data", "pdbs")
+SKMEPI2_PDBs = osp.join('..', 'data', 'PDBs')
 
-PDB_PATH = "../data/pdbs"
 
 try:
-    skempi_df = pd.read_excel(osp.join('../data', 'SKEMPI_1.1.xlsx'))
-    skempi_df_v2 = pd.read_csv(osp.join('../data', 'skempi_v2.csv'))
+    skempi_df = pd.read_excel(osp.join('..', 'data', 'SKEMPI_1.1.xlsx'))
 except IOError as e:
     print("warning: %s" % e)
     skempi_df = None
-    skempi_df_v2 = None
 
 
 NUM_GROUPS = 5
@@ -62,3 +56,7 @@ G5 = [
     2WPTAB 1A22AB 2B0ZAB 2B10AB 2B11AB 2B12AB 2PCBAB 2PCCAB 1KTZAB 1LFDAB
     1FCCAC 1GL0EI 1GL1AI 1HE8AB 2HLEAB 2I9BAE
     """.split(' ') if s.strip()]
+
+
+if __name__ == "__main__":
+    pass

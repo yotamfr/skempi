@@ -1,5 +1,3 @@
-import os
-import os.path as osp
 import requests
 import numpy as np
 
@@ -34,12 +32,10 @@ UNKNOWN = 'UNK'
 
 
 UNHANDLED = {'HETSYN', 'COMPND', 'SOURCE', 'KEYWDS', 'EXPDTA', 'AUTHOR', 'REVDAT', 'JRNL', 'SIGATM',
-             'REMARK', 'DBREF', 'SEQADV', 'HET', 'HETATM', 'HETNAM', 'FORMUL', 'HELIX', 'CAVEAT',
+             'REMARK', 'DBREF', 'SEQADV', 'HET', 'HETNAM', 'FORMUL', 'HELIX', 'CAVEAT',
              'SHEET', 'SITE', 'LINK', 'CISPEP', 'SITE', 'CRYST1', 'MTRIX1', 'MTRIX2', 'MTRIX3',
-             'ORIGX1', 'ORIGX2', 'ORIGX3', 'SSBOND', 'MODRES', 'SPRSDE', 'ANISOU', 'ANISOU10000', 'DBREF1',
-             'HETATM13247', 'HETATM13248', 'HETATM13249', 'HETATM13250', 'HETATM13256', 'HETATM13258',
-             'HETATM13251', 'HETATM13252', 'HETATM13253', 'HETATM13254', 'HETATM13255', 'HETATM13257',
-             'SCALE1', 'SCALE2', 'SCALE3', 'SEQRES', 'CONECT', 'MASTER', 'END', 'NUMMDL', 'MDLTYP',
+             'ORIGX1', 'ORIGX2', 'ORIGX3', 'SSBOND', 'MODRES', 'SPRSDE', 'DBREF1',
+             'SCALE1', 'SCALE2', 'SCALE3', 'SEQRES', 'MASTER', 'END', 'NUMMDL', 'MDLTYP',
              'SPLIT', 'HYDBND', 'SIGUIJ', 'DBREF2', 'SLTBRG'}  # TODO: Handle Multiple Models
 
 
@@ -59,7 +55,7 @@ def download_pdb(pdb, outdir="../data/pdbs_n"):
 
 class Atom(object):
 
-    def __init__(self, name, num, residue, x, y, z, occup, temp):
+    def __init__(self, name, num, residue, x, y, z, occup, temp, chain_id):
         assert name != ''
         self.num = num
         self.name = name
@@ -67,6 +63,7 @@ class Atom(object):
         self.occup = occup
         self.res = residue
         self._coord = (x, y, z)
+        self.orig_chain = chain_id
 
     @property
     def res_name(self):
@@ -78,7 +75,7 @@ class Atom(object):
 
     @property
     def chain_id(self):
-        return self.res.chain.chain_id
+        return self.res.chain_id
 
     @property
     def type(self):
@@ -115,13 +112,37 @@ class Atom(object):
             .format(atom_num, atom_name, AAA_dict[aa], chain_id, res_num, x, y, z, occup, temp, self.type, typ='ATOM')
 
 
+def to_one_letter(three_letter_name):
+    try:
+        return AA_dict[three_letter_name]
+    except KeyError:
+        if three_letter_name == 'F2F':
+            return 'F'
+        if three_letter_name == 'HIC':
+            return 'H'
+        if three_letter_name == 'CGU':
+            return 'E'
+        if three_letter_name == 'PTR':
+            return 'Y'
+        if three_letter_name == 'MSE':
+            return 'M'
+        if three_letter_name == '4HT':
+            return 'W'
+        if three_letter_name == 'DHI':
+            return 'H'
+        if three_letter_name == 'LLP':
+            return 'K'
+        raise KeyError("Unidentified res: \'%s\'" % three_letter_name)
+
+
 class Residue(object):
 
-    def __init__(self, name, num, chain, atoms=[]):
+    def __init__(self, one_letter_name, num, index, chain, atoms=[]):
         self.atoms = atoms
-        self.name = name
         self.chain = chain
+        self.index = index
         self.num = num
+        self.name = one_letter_name
 
     @property
     def ca(self):
@@ -138,8 +159,8 @@ class Residue(object):
         return cbeta[0]
 
     @property
-    def ix(self):
-        return self.num - 1
+    def chain_id(self):
+        return self.chain.chain_id
 
     def __iter__(self):
         for atom in self.atoms:
@@ -152,7 +173,7 @@ class Residue(object):
         return hash((self.chain, self.num, self.name))
 
     def __str__(self):
-        return "<Residue %s>" % AAA_dict[self.name]
+        return "<Residue %s:%d>" % (AAA_dict[self.name], self.num)
 
 
 class Chain(object):
@@ -167,13 +188,10 @@ class Chain(object):
             yield res
 
     def __getitem__(self, i):
-        try:
-            return self.residues[i]
-        except IndexError:
-            print(i, str(self), len(self.residues))
+        return self.residues[i]
 
     def __str__(self):
-        return "<Chain %s %d>" % (self.id, len(self))
+        return "<Chain %s>" % self.id
 
     @property
     def atoms(self):
@@ -234,6 +252,9 @@ class PDB(object):
     def __getitem__(self, chain_id):
         return self._chains[self._id_to_ix[chain_id]]
 
+    def __str__(self):
+        return "<PDB %s>" % self.pdb
+
     def to_pdb(self, path):
         lines = []
         for chain in self._chains:
@@ -258,14 +279,8 @@ def _handle_line(line, atoms, residues, chains, pdb, chain_id='', residue_num=0)
         pass
     elif typ == 'TITLE':
         pass
-    elif 'HETATM' in typ:
-        pass
-    elif 'CONECT' in typ:
-        pass
-    elif 'ANISOU' in typ:
-        pass
 
-    elif typ == 'ATOM':
+    elif typ == 'ATOM' or typ == 'HETATM':
 
         # https://www.cgl.ucsf.edu/chimera/docs/UsersGuide/tutorials/pdbintro.html
         l_line = line[6:11], line[12:16], line[17:20], line[21], line[22:26], \
@@ -278,18 +293,18 @@ def _handle_line(line, atoms, residues, chains, pdb, chain_id='', residue_num=0)
 
         try:
             occup, temp = float(occup), float(temp)
-        except ValueError as e:
+        except ValueError:
             occup, temp = 1.00, 00.00
-        x, y, z = float(x), float(y), float(z)
-        try:
-            res_name = AA_dict[res_name[-3:].strip()]
-        except KeyError:
-            return atoms, residues, chains, chain_id, res_num   # TODO : Not Amino Acid- Handle!
 
-        atom = Atom(atom_name, atom_num, None, x, y, z, occup, temp)
+        try:
+            res_name = to_one_letter(res_name.strip())
+        except KeyError:
+            return atoms, residues, chains, chain_id, res_num   # TODO : Handle Not Amino Acid!
+
+        atom = Atom(atom_name, atom_num, None, float(x), float(y), float(z), occup, temp, chain_id)
 
         if len(residues) == 0 or residue_num != res_num:
-            res = Residue(res_name, len(residues) + 1, None, [atom])
+            res = Residue(res_name, res_num, len(residues), None, [atom])
             residues.append(res)
         else:
             res = residues[-1]
@@ -302,10 +317,15 @@ def _handle_line(line, atoms, residues, chains, pdb, chain_id='', residue_num=0)
     elif typ == 'TER':
         assert chain_id
         chain = Chain(pdb, chain_id, residues)
-        for res in residues:
-            res.chain = chain
         chains.append(chain)
         residues = []
+
+    elif 'HETATM' in typ:
+        pass
+    elif 'CONECT' in typ:
+        pass
+    elif 'ANISOU' in typ:
+        pass
 
     else:
         raise ValueError("Unidentified type: '%s', PDB: %s" % (typ, pdb))
@@ -316,16 +336,20 @@ def _handle_line(line, atoms, residues, chains, pdb, chain_id='', residue_num=0)
 def parse_pdb(pdb, fd, chain_dict={}):
 
     line = fd.readline()
-
     atoms, residues, chains, chain_id, res_num = _handle_line(line, [], [], [], pdb)
-
     while line:
-
         line = fd.readline()
-
         atoms, residues, chains, chain_id, res_num = _handle_line(line, atoms, residues, chains, pdb, chain_id, res_num)
 
-    return PDB(pdb, atoms, [c for c in chains if len(c) > 0], chain_dict)
+    st = PDB(pdb, atoms, [c for c in chains if len(c) > 0], chain_dict)
+    for a in atoms:
+        if len(chain_dict) > 0:
+            a.res.chain = st[chain_dict[a.orig_chain]]
+        else:
+            a.res.chain = st[a.orig_chain]
+
+    assert not np.any([a.res.chain is None for a in atoms])
+    return st
 
 
 def parse_pdb2(pdb, path):
@@ -334,8 +358,7 @@ def parse_pdb2(pdb, path):
 
 if __name__ == "__main__":
     import os.path as osp
-    pdb = "4nos"
-    fd = open(osp.join("..", "data", "%s.pdb" % pdb), 'r')
+    pdb = "4CPA"
+    fd = open(osp.join("..", "data", 'PDBs',  "%s.pdb" % pdb), 'r')
     struct = parse_pdb(pdb, fd)
-    # struct.to_pdb("../data/%s.pdb" % pdb)
     print(struct.pdb)
