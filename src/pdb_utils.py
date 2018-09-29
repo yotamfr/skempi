@@ -101,7 +101,7 @@ class Atom(object):
         atom_num = self.num
         atom_name = self.name
         res_num = self.res_num
-        aa = self.res_name
+        aaa = self.res._name
         chain_id = self.chain_id
         occup = self.occup
         temp = self.temp
@@ -109,7 +109,7 @@ class Atom(object):
         return '{typ: <6}{0: >5}  {1: <4}{2: <4}{3: <1}{4: >4}    ' \
                '{5:8.3f}{6:8.3f}{7:8.3f}{8:6.2f}{9:6.2f}          ' \
                ' {10: <4}'\
-            .format(atom_num, atom_name, AAA_dict[aa], chain_id, res_num, x, y, z, occup, temp, self.type, typ='ATOM')
+            .format(atom_num, atom_name, aaa, chain_id, res_num, x, y, z, occup, temp, self.type, typ='ATOM')
 
 
 def to_one_letter(three_letter_name):
@@ -132,17 +132,25 @@ def to_one_letter(three_letter_name):
             return 'H'
         if three_letter_name == 'LLP':
             return 'K'
+        if three_letter_name == 'NAG':
+            return 'X'
+        if three_letter_name == 'UNK':
+            return 'X'
         raise KeyError("Unidentified res: \'%s\'" % three_letter_name)
 
 
 class Residue(object):
 
-    def __init__(self, one_letter_name, num, index, chain, atoms=[]):
+    def __init__(self, three_letter_name, num, index, chain, atoms=[]):
         self.atoms = atoms
         self.chain = chain
         self.index = index
         self.num = num
-        self.name = one_letter_name
+        self._name = three_letter_name
+
+    @property
+    def name(self):
+        return to_one_letter(self._name)
 
     @property
     def ca(self):
@@ -170,10 +178,10 @@ class Residue(object):
         return self.atoms[i]
 
     def __hash__(self):
-        return hash((self.chain, self.num, self.name))
+        return hash((self.chain, self.num, self._name))
 
     def __str__(self):
-        return "<Residue %s:%d>" % (AAA_dict[self.name], self.num)
+        return "<Residue %s:%d>" % (self._name, self.num)
 
 
 class Chain(object):
@@ -297,7 +305,7 @@ def _handle_line(line, atoms, residues, chains, pdb, chain_id='', residue_num=0)
             occup, temp = 1.00, 00.00
 
         try:
-            res_name = to_one_letter(res_name.strip())
+            to_one_letter(res_name)
         except KeyError:
             return atoms, residues, chains, chain_id, res_num   # TODO : Handle Not Amino Acid!
 

@@ -55,17 +55,19 @@ def bindprofx(skempi_record, bindprofx_home=BINDPROFX_HOME, bindprofx_data=BINDP
     mutations = skempi_record.mutations
     mutlist = MutList(mutations)
     ws = "bindprofx/%s" % struct.modelname
-    result_path = "%s/result.txt" % ws
     if not osp.exists(ws):
         os.makedirs(ws)
+    struct.to_pdb("%s/complex.pdb" % ws)
+    result_path = "%s/result.txt" % ws
     src = "%s/align/%s.aln" % (bindprofx_data, struct.pdb)
-    if osp.exists(src):
-        dst = "%s/align.out" % ws
-        shutil.copy(src, dst)
-        Alignment(dst).to_file(dst)
+    dst = "%s/align.out" % ws
+    if not osp.exists(src):
+        os.system("%s/XBindProf/run_align.pl %s/complex.pdb 0.5 %s"
+                  % (bindprofx_home, ws, src))
+    shutil.copy(src, dst)
+    Alignment(dst).to_file(dst)
     with open("%s/mutList.txt" % ws, "w+") as f:
         f.write(str(mutlist))
-    struct.to_pdb("%s/complex.pdb" % ws)
     cline = "%s %s/get_final_score.py %s" % (sys.executable, bindprofx_home, ws)
     assert os.WEXITSTATUS(os.system(cline)) == 0
     return get_bpx_score(result_path)

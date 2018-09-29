@@ -110,10 +110,7 @@ class SkempiStruct(PDB):
                                            pdb_struct.atoms,
                                            pdb_struct._chains,
                                            dict(zip(cs, cs)))
-        try:
-            self._stride = get_stride(self, chains_a, chains_b)
-        except ValueError:
-            self._stride = None
+        self._stride = get_stride(self, chains_a, chains_b)
 
     @property
     def stride(self):
@@ -395,8 +392,8 @@ def load_skempi(skempi_df, path_to_pdbs, load_mut=True, load_prof=True):
         row = skempi_df.loc[i]
         mutations = parse_mutations(row["Mutation(s)_cleaned"])
         ddg = row["DDG"]
-        modelname, chain_A, chain_B = t = row.Protein.split('_')
-        r = SkempiRecord(structs[tuple(t)], chain_A, chain_B, mutations, ddg,
+        modelname, chain_A, chain_B = t = tuple(row.Protein.split('_'))
+        r = SkempiRecord(structs[t], chain_A, chain_B, mutations, ddg,
                          load_mutant=load_mut, init_profiles=load_prof)
         records.append(r)
     return records
@@ -410,6 +407,21 @@ def load_skempi_v2():
     return load_skempi(prepare_skempi_v2(), SKMEPI2_PDBs, True, False)
 
 
+def prepare_zemu():
+    df = pd.read_csv(osp.join('..', 'data', 'dataset_ZEMu.2.csv'))
+    df2 = prepare_skempi_v2()
+    df1 = skempi_df
+    df["DDG"] = df[" Gexp (kcal/mol)"]
+    df["ZEMu"] = df[" G ZEMu (kcal/mol) \tID"]
+    df["Mutation(s)_cleaned"] = df[" Mutant"].apply(lambda s: s.replace(".", ","))
+    pdbs, _, _ = zip(*[prot.split('_') for prot in df2["#Pdb"]])
+    D = {pdb: cpx for pdb, cpx in zip(pdbs, df2["#Pdb"])}
+    pdbs, _, _ = zip(*[prot.split('_') for prot in df1.Protein])
+    D.update({pdb: cpx for pdb, cpx in zip(pdbs, df1.Protein)})
+    df["Protein"] = [D[p] for p in df["\PDB ID"]]
+    return df
+
+
 def prepare_skempi_v2():
     with open(osp.join('..', 'data', 'skempi_v2.csv'), 'r') as f:
         lines = f.readlines()
@@ -418,6 +430,8 @@ def prepare_skempi_v2():
     while lines:
         line = lines.pop(0)
         row = [s for s in line.strip().split(";")]
+        if "1KBH" == row[0][:4]:
+            continue
         for i, item in enumerate(row[1:]):
             try: parse_mutations(item)
             except: break

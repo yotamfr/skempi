@@ -4,6 +4,7 @@ import subprocess
 import numpy as np
 import pandas as pd
 
+
 STRIDE_EXE = '../stride/stride'
 
 
@@ -13,17 +14,19 @@ def delta_sasa(chainA, chainB, path_to_pdb):
     df_complex = parse_stride(proc0.stdout)
     args = [STRIDE_EXE, path_to_pdb, '-r%s' % (chainA,)]
     proc1 = subprocess.Popen(args, stdout=subprocess.PIPE)
-    df_a = parse_stride(proc1.stdout)
+    try: df_a = parse_stride(proc1.stdout)
+    except ValueError: df_a = df_complex[df_complex.Chain == chainA]
     args = [STRIDE_EXE, path_to_pdb, '-r%s' % (chainB,)]
     proc2 = subprocess.Popen(args, stdout=subprocess.PIPE)
-    df_b = parse_stride(proc2.stdout)
+    try: df_b = parse_stride(proc2.stdout)
+    except ValueError: df_b = df_complex[df_complex.Chain == chainB]
     ress_a, ress_b = list(df_a.Res), list(df_b.Res)
     ress = np.asarray(sorted(df_complex.Res))
     asa_a, asa_b = list(df_a.ASA), list(df_b.ASA)
     asa = np.asarray(list(df_complex.ASA))
     assert np.all(ress == np.asarray(sorted(ress_a + ress_b)))
-    assert np.any(np.asarray(asa_a + asa_b) != asa)
-    df_complex.loc[:, "ASA_Chain"] = np.asarray(asa_a + asa_b)
+    # assert np.any(np.asarray(asa_a + asa_b) != asa)
+    df_complex["ASA_Chain"] = np.asarray(asa_a + asa_b)
     return df_complex
 
 
@@ -39,6 +42,7 @@ def parse_stride(out):
         line = out.readline()
 
     aas, chains, ress, sss, phis, psis, asas = zip(*info)
+
     return pd.DataFrame({"AA": aas, "Chain": chains, "Res": ress,
                          "SS": sss, "Phi": phis, "Psi": psis, "ASA": asas})
 
