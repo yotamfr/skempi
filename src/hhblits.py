@@ -1,17 +1,12 @@
 import os
 import sys
-import io
 import glob
 
-from datetime import datetime
-from datetime import timedelta
-
-from numpy import unique
-
 from tqdm import tqdm
+import pandas as pd
 
+from Bio import SeqIO
 from Bio.Seq import Seq
-from Bio import SeqIO, AlignIO
 from Bio.SeqRecord import SeqRecord
 from Bio.SeqIO import parse as parse_fasta
 
@@ -33,12 +28,12 @@ prefix_blast = "/usr/bin"
 # hhblits_dbname = "pdb70"
 # hhblits_dbname = "scop90"
 # hhblits_dbname = "scop95"
-# hhblits_dbname = "uniprot20_2016_02"
-hhblits_dbname = "uniclust30_2017_10"
+hhblits_dbname = "uniprot20_2016_02"
+# hhblits_dbname = "uniclust30_2017_10"
 batch_size = 2
 num_cpu = 2
 max_filter = 20000
-coverage = 0
+coverage = 0.0
 mact = 0.9
 
 GAP = '-'
@@ -119,44 +114,37 @@ def _run_hhblits_batched(sequences, collection):
 
         sequences_fasta = 'batch.fasta'
         SeqIO.write(batch, open(sequences_fasta, 'w+'), "fasta")
-        cline = "%s/scripts/splitfasta.pl %s 1>/dev/null 2>&1" \
-                % (prefix_hhsuite, sequences_fasta)
+        cline = "%s/scripts/splitfasta.pl %s 1>/dev/null 2>&1" % (prefix_hhsuite, sequences_fasta)
         assert os.WEXITSTATUS(os.system(cline)) == 0
 
-        if len(glob.glob('*.a3m')): os.system("rm *.a3m")
+        hhblits_cmd = "/usr/bin/hhblits -i $file -d ../dbs/%s/%s -opsi $name.aln -n 2" \
+                      % (hhblits_dbname, hhblits_dbname)
 
-        hhblits_cmd = "%s/bin/hhblits -i $file -d ../dbs/%s/%s -oa3m $name.a3m -n 2 -maxfilt %d -mact %s"\
-                      % (prefix_hhsuite, hhblits_dbname, hhblits_dbname, max_filter, mact)
         cline = "%s/scripts/multithread.pl \'*.seq\' \'%s\' -cpu %d 1>/dev/null 2>&1" \
-                % (prefix_hhsuite, hhblits_cmd, num_cpu)
+            % (prefix_hhsuite, hhblits_cmd, num_cpu)
+
         assert os.WEXITSTATUS(os.system(cline)) == 0
 
         if coverage > 0:
             if len(glob.glob('*.fil')): os.system("rm *.fil")
-            hhfilter_cmd = "%s/bin/hhfilter -i $file -o $name.fil -cov %d" \
-                           % (prefix_hhsuite, coverage)
-            cline = "%s/scripts/multithread.pl \'*.a3m\' \'%s\' -cpu %d 1>/dev/null 2>&1" \
+            hhfilter_cmd = "%s/bin/hhfilter -i $file -o $name.fil -cov %d" % (prefix_hhsuite, coverage)
+            cline = "%s/scripts/multithread.pl \'*.aln\' \'%s\' -cpu %d 1>/dev/null 2>&1" \
                     % (prefix_hhsuite, hhfilter_cmd, num_cpu)
             assert os.WEXITSTATUS(os.system(cline)) == 0
 
-        suffix = 'fil' if coverage > 0 else 'a3m'
+        suffix = 'fil' if coverage > 0 else 'aln'
 
         if output_fasta:
-            reformat_cmd = "%s/scripts/reformat.pl -r a3m fas $file $name.fas" % prefix_hhsuite
+            reformat_cmd = "%s/scripts/reformat.pl -r psi fas $file $name.fas" % prefix_hhsuite
             cline = "%s/scripts/multithread.pl \'*.%s\' \'%s\' -cpu %d 1>/dev/null 2>&1" \
                     % (prefix_hhsuite, suffix, reformat_cmd, num_cpu)
             assert os.WEXITSTATUS(os.system(cline)) == 0
 
-        reformat_cmd = "%s/scripts/reformat.pl -r a3m psi $file $name.psi" % prefix_hhsuite
-        cline = "%s/scripts/multithread.pl \'*.%s\' \'%s\' -cpu %d 1>/dev/null 2>&1"\
-                % (prefix_hhsuite, suffix, reformat_cmd, num_cpu)
-        assert os.WEXITSTATUS(os.system(cline)) == 0
-
         e = ThreadPoolExecutor(num_cpu)
-        for (seq, aln) in e.map(_get_aln, [seq for seq in batch if os.path.exists("%s.a3m" % seq.id)]):
+        for (seq, msa) in e.map(_get_msa, [seq for seq in batch if os.path.exists("%s.aln" % seq.id)]):
             collection.update_one({
                 "_id": seq.id}, {
-                '$set': {"alignment": aln,
+                '$set': {"aln": msa,
                          "seq": str(seq.seq),
                          "length": len(seq.seq),
                          "updated_at": datetime.utcnow()}
@@ -188,11 +176,16 @@ def _get_profile_func(method="pssm"):
             os.chdir(out_dir)
 
             e = ThreadPoolExecutor(num_cpu)
-            for (seq, attr) in e.map(func, [seq for seq in batch]):
-                if not attr: continue
+            for (seq, prof) in e.map(func, [seq for seq in batch]):
+
+                if not prof: continue
+
+                pd.DataFrame({k: [dic[k] for dic in prof] for k in prof[0]})\
+                    .to_csv("./%s.prof" % seq.id, index=False)
+
                 collection.update_one({
                     "_id": seq.id}, {
-                    '$set': {method: attr,
+                    '$set': {method: prof,
                              "seq": str(seq.seq),
                              "length": len(seq.seq),
                              "updated_at": datetime.utcnow()}
@@ -210,19 +203,12 @@ def _read_a3m(seq):
 
 
 # MUST BE RUN AFTER HHBLITS FINISHED
-def _get_aln(seq):
+def _get_msa(seq):
 
-    # cline = "%s/scripts/addss.pl %s.a3m" % (prefix_hhsuite, seq.id)
-    # assert os.WEXITSTATUS(os.system(cline)) == 0
-
-    # cline = "%s/scripts/reformat.pl -r a3m psi %s.a3m %s.psi" \
-    #         % (prefix_hhsuite, seq.id, seq.id)
-    # assert os.WEXITSTATUS(os.system(cline)) == 0
-
-    _set_unique_ids("%s.psi" % seq.id, "%s.msa" % seq.id)   # can assume there is a file like that
+    _set_unique_ids("%s.aln" % seq.id, "%s.msa" % seq.id)   # can assume there is a file like that
 
     aln = []
-    with open("%s.psi" % seq.id, 'rt') as f:
+    with open("%s.aln" % seq.id, 'rt') as f:
         for line in f.readlines():
             r = line.strip().split()
             assert len(r) == 2
@@ -234,9 +220,9 @@ def _get_aln(seq):
 def _get_pssm(seq):
 
     doc = db.skempi.find_one({"_id": seq.id})
-    if not doc or not "alignment" in doc:
+    if not doc or not "aln" in doc:
         return None, None
-    aln = doc["alignment"]
+    aln = doc["aln"]
     lines = [' '.join([uid, homo]) for uid, homo in aln]
     with open("%s.msa" % seq.id, 'w+') as f:
         f.writelines(lines)
@@ -247,8 +233,6 @@ def _get_pssm(seq):
             % (prefix_blast, seq.id, seq.id, seq.id)
     assert os.WEXITSTATUS(os.system(cline)) == 0
 
-    # aln = list(AlignIO.parse(open("%s.fas" % seq.id, 'r'), "fasta"))
-    # pssm = SummaryInfo(aln[0]).pos_specific_score_matrix(chars_to_ignore=IGNORE)
     aa, pssm = read_pssm("%s.pssm" % seq.id)
 
     return seq, pssm
@@ -257,19 +241,22 @@ def _get_pssm(seq):
 def _get_profile(seq):
 
     doc = db.skempi.find_one({"_id": seq.id})
-    if not doc or not "alignment" in doc:
+
+    if not doc or not "aln" in doc:
         return None, None
-    aln = doc["alignment"]
+    aln = doc["aln"]
 
     profile = []
     for pos in range(len(seq)):
         total_count = 0
-        pos_profile = {AA.index2aa[ix]: 0. for ix in range(20)}
+        pos_profile = {AA.index2aa[ix]: 0.0 for ix in range(20)}
+        pos_profile[GAP] = 0.0
         for _, homo in aln:
             aa = homo[pos]
-            if aa == GAP: continue
-            if AA.aa2index[aa] < 20:
-                pos_profile[aa] += 1
+            if aa == GAP:
+                pos_profile[GAP] += 1.0
+            elif AA.aa2index[aa] < 20:
+                pos_profile[aa] += 1.0
             elif aa == 'X':
                 for k in pos_profile.keys():
                     pos_profile[k] += 0.05
@@ -317,7 +304,7 @@ def add_arguments(parser):
                         help="Supply an input file in FASTA format.")
     parser.add_argument('--out_dir', default='./hhblits', type=str, metavar='PATH',
                         help='Where to save the output/log files?')
-    parser.add_argument("--comp", type=str, required=True, choices=['hhblits', 'profile', 'pssm'],
+    parser.add_argument("--comp", type=str, default='hhblits', choices=['hhblits', 'profile', 'pssm'],
                         help="The name of the computation that you want run.")
     parser.add_argument("--db_name", type=str, default='prot2vec', choices=['prot2vec', 'prot2vec2'],
                         help="The name of the DB to which to write the data.")

@@ -95,17 +95,22 @@ class CNN3dV2(nn.Module):
             nn.Dropout(dropout),
             nn.MaxPool3d((2, 2, 2)),
         )
-        self.classification = nn.Sequential(
+        self.compression = nn.Sequential(
             nn.Linear(10800, 1000),
             nn.ReLU(inplace=True),
             nn.Dropout(dropout),
-            nn.Linear(1000, 40),
+            nn.Linear(1000, 200),
+            nn.ReLU(inplace=True)
+        )
+        self.regression = nn.Sequential(
+            nn.Linear(200, 40)
         )
 
     def forward(self, x):
         x = self.features(x)
         x = x.view(len(x), -1)
-        x = self.classification(x)
+        x = self.compression(x)
+        x = self.regression(x)
         return x
 
 

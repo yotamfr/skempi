@@ -1,6 +1,7 @@
 import os
 import sys
 
+from tqdm import tqdm
 import numpy as np
 import pandas as pd
 import os.path as osp
@@ -59,7 +60,8 @@ class MSA(object):
 class Profile(object):
     def __init__(self, pdb, chain):
         uid = "%s_%s.prof" % (pdb, chain)
-        df = pd.read_csv(osp.join("..", "data", "skempiprofiles", uid), sep=' ')
+        # df = pd.read_csv(osp.join("..", "data", 'skempiprofiles', uid), sep=' ')
+        df = pd.read_csv(osp.join("..", "hhblits", uid), sep=',')
         self._profile = [df.loc[i].to_dict() for i in range(len(df))]
 
     def __getitem__(self, t):
@@ -104,17 +106,33 @@ def get_stride(pdb_struct, ca, cb):
 
 class SkempiStruct(PDB):
 
-    def __init__(self, pdb_struct, chains_a, chains_b):
+    def __init__(self, pdb_struct, chains_a, chains_b, profiles=None, alignments=None):
         cs = list(chains_a + chains_b)
         super(SkempiStruct, self).__init__(pdb_struct.pdb,
                                            pdb_struct.atoms,
                                            pdb_struct._chains,
                                            dict(zip(cs, cs)))
-        self._stride = get_stride(self, chains_a, chains_b)
+        self.profiles = profiles
+        self.alignments = alignments
+        self.init_profiles()
+        self.init_alignments()
+        self.stride = get_stride(self, chains_a, chains_b)
 
-    @property
-    def stride(self):
-        return self._stride
+    def init_profiles(self):
+        if self.profiles is not None:
+            return
+        self.profiles = {c: Profile(self.pdb, c) for c in self.chains}
+
+    def init_alignments(self):
+        if self.alignments is not None:
+            return
+        self.alignments = {c: MSA(self.pdb, c) for c in self.chains}
+
+    def get_profile(self, chain_id):
+        return self.profiles[chain_id]
+
+    def get_alignment(self, chain_id):
+        return self.alignments[chain_id]
 
     @property
     def modelname(self):
@@ -123,62 +141,31 @@ class SkempiStruct(PDB):
 
 class SkempiRecord(object):
 
-    def __init__(self, struct, chains_a, chains_b, mutations, ddg=0.0,
-                 load_mutant=True, init_profiles=True):
-        self.struct = SkempiStruct(struct, chains_a, chains_b)
+    def __init__(self, skempi_struct, chains_a, chains_b, mutations, ddg=None, load_mutant=True):
+        self.struct = skempi_struct
         self.mutant = None
         self.chains_a = chains_a
         self.chains_b = chains_b
         self.mutations = mutations
         self.ddg = ddg
-        self._profiles = None
-        self._alignments = None
         if load_mutant:
             self.init_mutant()
-        if init_profiles:
-            self.init_profiles()
-            self.init_alignments()
 
     @property
     def pdb(self):
         return self.struct.pdb[:4].upper()
-
-    def init_profiles(self):
-        if self._profiles is not None:
-            return
-        self._profiles = {c: Profile(self.pdb, c) for c in self.chains}
-
-    def init_alignments(self):
-        if self._alignments is not None:
-            return
-        self._alignments = {c: MSA(self.pdb, c) for c in self.chains}
-
-    def get_profile(self, chain_id):
-        return self._profiles[chain_id]
-
-    def get_alignment(self, chain_id):
-        return self._alignments[chain_id]
-
-    @property
-    def chains(self):
-        return self.struct.chains
-
-    def features(self):
-        return get_features(self)
 
     def init_mutant(self):
         wt = self.struct
         mutantname, ws = apply_modeller(wt, self.mutations)
         pth = osp.join(ws, "%s.pdb" % mutantname)
         mutant_sturct = parse_pdb(mutantname, open(pth, 'r'))
-        self.mutant = SkempiStruct(mutant_sturct, self.chains_a, self.chains_b)
+        profiles, alignments = self.struct.profiles, self.struct.alignments
+        self.mutant = SkempiStruct(mutant_sturct, self.chains_a, self.chains_b, profiles, alignments)
 
     def __reversed__(self):
         mutations = [reversed(mut) for mut in self.mutations]
-        record = SkempiRecord(self.mutant, self.chains_a, self.chains_b, mutations, -self.ddg,
-                              load_mutant=False, init_profiles=False)
-        record._profiles = self._profiles
-        record._alignments = self._alignments
+        record = SkempiRecord(self.mutant, self.chains_a, self.chains_b, mutations, -self.ddg, load_mutant=False)
         record.mutant = self.struct
         return record
 
@@ -226,24 +213,24 @@ def parse_mutations(mutations_str, reverse=False, sep=','):
         return mutations
 
 
-def comp_CP_in_shell(mut, struct, mat, inner, outer):
+def comp_cp_in_shell(mut, struct, mat, inner, outer):
     res = struct[mut.chain_id][mut.i]
     cp_A, cp_B = get_cp_in_shell_around_res(res, struct.atoms, inner, outer, mat, ['C'])
     return cp_A[mut.m], cp_B[mut.m]
 
 
-def get_CPs_shell(record, inner, outer, mat=BASU010101):
-    return [comp_CP_in_shell(mut, record.struct, mat, inner, outer) for mut in record.mutations]
+def get_cps_shell(struct, mutations, inner, outer, mat=BASU010101):
+    return [comp_cp_in_shell(mut, struct, mat, inner, outer) for mut in mutations]
 
 
-def comp_CP_in_sphere(mut, struct, mat, rad):
+def comp_cp_in_sphere(mut, struct, mat, rad):
     res = struct[mut.chain_id][mut.i]
     cp_A, cp_B = get_cp_in_sphere_around_res(res, struct.atoms, rad, mat, ['C'])
     return cp_A[mut.m], cp_B[mut.m]
 
 
-def get_CPs_sphere(record, rad, mat=BASU010101):
-    return [comp_CP_in_sphere(mut, record.struct, mat, rad) for mut in record.mutations]
+def get_cps_sphere(record, rad, mat=BASU010101):
+    return [comp_cp_in_sphere(mut, record.struct, mat, rad) for mut in record.mutations]
 
 
 def avg_bfactor(struct, mut):
@@ -258,78 +245,66 @@ def get_bfactor(record, agg=np.min, pdb_path="../data/pdbs_n"):  # obtain wt b-f
     return agg([avg_bfactor(struct, mut) for mut in record.mutations])
 
 
-def get_counts(record):
+def get_counts(mutations):
     ret = {AAA_dict[aa]: 0.0 for aa in amino_acids}
-    for mut in record.mutations:
-        ret[AAA_dict[mut.w]] += 1
-        ret[AAA_dict[mut.m]] -= 1
+    for mut in mutations:
+        ret[AAA_dict[mut.w]] += 1.0
+        ret[AAA_dict[mut.m]] -= 1.0
     return ret
 
 
-def score_cp(record, mut, inner, outer, mat=BASU010101):
+def score_cp(struct, mut, inner, outer, mat=BASU010101):
     w, m = mut.w, mut.m
-    struct = record.struct
     center_res = struct[mut.chain_id][mut.i]
     center = center_res.ca.coord
     neighbors = get_atoms_in_shell_around_center(center, struct.atoms, inner, outer, ['C'])
     residues_indices = set([(a.res.chain_id, a.res.index) for a in neighbors
                             if a.res.chain.chain_id != mut.chain_id])
-    return sum([sum([record.get_profile(A)[(j, a)] * (mat[(a, m)] - mat[(a, w)])
+    return sum([sum([struct.get_profile(A)[(j, a)] * (mat[(a, m)] - mat[(a, w)])
                 for a in amino_acids]) for A, j in residues_indices])
 
 
-def score_cp46(record, mut, mat=BASU010101):
-    return score_cp(record, mut, 4.0, 6.0, mat=mat)
+def score_cp46(struct, mut, mat=BASU010101):
+    return score_cp(struct, mut, 4.0, 6.0, mat=mat)
 
 
-def score_cp68(record, mut, mat=BASU010101):
-    return score_cp(record, mut, 6.0, 8.0, mat=mat)
+def score_cp68(struct, mut, mat=BASU010101):
+    return score_cp(struct, mut, 6.0, 8.0, mat=mat)
 
 
-def score_hse(record, mut, rad=8.0):
-    def hse(struct, mut, rad):
-        res = struct[mut.chain_id][mut.i]
-        hse_up, hse_down = get_hse_in_sphere(res, struct.atoms, rad, ['C'])
-        return hse_up, hse_down
-    up_mut, down_mut = hse(record.mutant, mut, rad)
-    up_wt, down_wt = hse(record.struct, mut, rad)
-    return np.log((1.0 + len(up_mut) * len(down_wt)) / (1.0 + len(up_wt) * len(down_mut)))
-
-
-def score_bv(record, mut, PBV=BASU010101, rad=8.0):
+def score_bv(struct, mut, PBV=BASU010101, rad=8.0):
     w, m = mut.w, mut.m
-    struct = record.struct
     center_res = struct[mut.chain_id][mut.i]
     center = center_res.ca.coord
     neighbors = get_atoms_in_sphere_around_center(center, struct.atoms, rad, ['C'])
     residues_indices = set([(a.res.chain_id, a.res.index) for a in neighbors])
-    return sum([sum([record.get_profile(A)[(j, a)] * (PBV[(a, m)] - PBV[(a, w)])
+    return sum([sum([struct.get_profile(A)[(j, a)] * (PBV[(a, m)] - PBV[(a, w)])
                      for a in amino_acids]) for A, j in residues_indices])
 
 
-def score_sk(record, mut, PSK=SKOJ970101, k=2):
-    prof = record.get_profile(mut.chain_id)
+def score_sk(struct, mut, PSK=SKOJ970101, k=2):
+    prof = struct.get_profile(mut.chain_id)
     return sum([sum([prof[(j, a)] * (PSK[(a, mut.m)] - PSK[(a, mut.w)]) for a in amino_acids
                      ]) for j in range(max(0, mut.i-k), min(len(prof), mut.i+k+1)) if j != 0])
 
 
-def score_evo(record, mut, a=25, b=0, c=0):
+def score_evo(struct, mut, a=25, b=0, c=0):
     i, w, m = mut.i, mut.w, mut.m
-    ali = record.get_alignment(mut.chain_id)
+    ali = struct.get_alignment(mut.chain_id)
     nom = ali.N(m, i) + ali.Np(m, i, (a, b, c))
     denom = ali.N(w, i) + ali.Np(w, i, (a, b, c))
     return -np.log(float(nom) / denom)
 
 
-def score_stride(record, mut):
-    struct, mutant, m = record.struct, record.mutant, mut
+def ac_ratio(struct, mut):
     def dasa(stride): return stride["ASA_Chain"] - stride["ASA"]
-    d = dasa(mutant.stride[(m.chain_id, m.i)]) - dasa(struct.stride[(m.chain_id, m.i)])
-    return d
+    d = dasa(struct.stride[(mut.chain_id, mut.i)])
+    res = struct[mut.chain_id][mut.i]
+    return float(d) / MaxASA_emp[res.name]
 
 
-def score_bi(record, mut, B=BLOSUM62):
-    prof = record.get_profile(mut.chain_id)
+def score_bi(struct, mut, B=BLOSUM62):
+    prof = struct.get_profile(mut.chain_id)
     return sum([prof[(mut.i, a)] * (B[(a, mut.m)] - B[(a, mut.w)]) for a in amino_acids])
 
 
@@ -337,74 +312,76 @@ def get_descriptor(mut, mat):
     return mat[mut.m] - mat[mut.w]
 
 
-def score_descriptor(record, mut, K):
-    prof = record.get_profile(mut.chain_id)
+def score_descriptor(struct, mut, K):
+    prof = struct.get_profile(mut.chain_id)
     return prof[(mut.i, mut.m)] * K[mut.m] - prof[(mut.i, mut.w)] * K[mut.w]
 
 
-def score_hp(record, mut):
-    return score_descriptor(record, mut, K=KYTJ820101)
+def score_hp(struct, mut):
+    return score_descriptor(struct, mut, K=KYTJ820101)
 
 
-def score_molweight(record, mut):
-    return score_descriptor(record, mut, K=FASG760101)
+def score_molweight(struct, mut):
+    return score_descriptor(struct, mut, K=FASG760101)
 
 
-def score_hydphob(record, mut):
-    return score_descriptor(record, mut, K=ARGP820101)
+def score_hydphob(struct, mut):
+    return score_descriptor(struct, mut, K=ARGP820101)
 
 
-def score_asa(record, mut):
-    return score_descriptor(record, mut, K=MaxASA_emp)
+def score_asa(struct, mut):
+    return score_descriptor(struct, mut, K=MaxASA_emp)
 
 
 def agg_multiple_scores_to_one(scores):
     return np.max(scores) + np.min(scores) - np.mean(scores)
 
 
-def compute_score(score_func, record, agg=agg_multiple_scores_to_one):
-    return agg([score_func(record, mut) for mut in record.mutations])
+def compute_score(score_func, struct, mutations, agg=agg_multiple_scores_to_one, with_ac=True):
+    if with_ac:
+        return agg([ac_ratio(struct, mut) * score_func(struct, mut) for mut in mutations])
+    else:
+        return agg([score_func(struct, mut) for mut in mutations])
 
 
-def get_features(record):
+def get_features(struct, mutations):
     feats = dict()
-    feats["Hp"] = compute_score(score_hp, record, agg=np.mean)
-    feats["MolWeight"] = compute_score(score_molweight, record, agg=np.mean)
-    feats["MaxASA"] = compute_score(score_asa, record, agg=np.mean)
-    feats["CP68"] = compute_score(score_cp68, record, agg=np.sum)
-    feats["EVO"] = compute_score(score_evo, record, agg=np.sum)
-    feats["STRIDE"] = compute_score(score_stride, record, agg=np.sum)
-    feats["BI"] = compute_score(score_bi, record, agg=np.sum)
-    feats.update(get_counts(record))
+    feats["Hp"] = compute_score(score_hp, struct, mutations, agg=np.mean)
+    feats["MolWeight"] = compute_score(score_molweight, struct, mutations, agg=np.mean)
+    feats["MaxASA"] = compute_score(score_asa, struct, mutations, agg=np.mean)
+    feats["EVO"] = compute_score(score_evo, struct, mutations, agg=np.sum)
+    feats["BI"] = compute_score(score_bi, struct, mutations, agg=np.sum)
+    feats.update(get_counts(mutations))
     return feats
 
 
-def load_skempi(skempi_df, path_to_pdbs, load_mut=True, load_prof=True):
-    from tqdm import tqdm
+def load_skempi(skempi_df, path_to_pdbs, load_mut=True):
     structs = {}
     for i in tqdm(range(len(skempi_df)), "loading structures"):
         row = skempi_df.loc[i]
-        t = tuple(row.Protein.split('_'))
+        modelname, chains_a, chains_b = t = tuple(row.Protein.split('_'))
+        if t in structs:
+            continue
         pth = osp.join(path_to_pdbs, "%s.pdb" % t[0])
-        structs[t] = parse_pdb(t[0], open(pth, 'r'))
+        st = parse_pdb(modelname, open(pth, 'r'))
+        structs[t] = SkempiStruct(st, chains_a, chains_b)
     records = []
     for i in tqdm(range(len(skempi_df)), "loading records"):
         row = skempi_df.loc[i]
         mutations = parse_mutations(row["Mutation(s)_cleaned"])
         ddg = row["DDG"]
-        modelname, chain_A, chain_B = t = tuple(row.Protein.split('_'))
-        r = SkempiRecord(structs[t], chain_A, chain_B, mutations, ddg,
-                         load_mutant=load_mut, init_profiles=load_prof)
+        modelname, chains_a, chains_b = t = tuple(row.Protein.split('_'))
+        r = SkempiRecord(structs[t], chains_a, chains_b, mutations, ddg, load_mutant=load_mut)
         records.append(r)
     return records
 
 
 def load_skempi_v1():
-    return load_skempi(skempi_df, PDB_PATH, True, True)
+    return load_skempi(skempi_df, PDB_PATH, True)
 
 
 def load_skempi_v2():
-    return load_skempi(prepare_skempi_v2(), SKMEPI2_PDBs, True, False)
+    return load_skempi(prepare_skempi_v2(), SKMEPI2_PDBs, True)
 
 
 def prepare_zemu():
@@ -467,6 +444,7 @@ if __name__ == "__main__":
     row = skempi_df.loc[i]
     mutations = parse_mutations(row["Mutation(s)_cleaned"])
     modelname, chain_A, chain_B = t = row.Protein.split('_')
-    r = SkempiRecord(structs[tuple(t)], chain_A, chain_B, mutations)
-    f = r.features()
+    st = structs[tuple(t)]
+    r = SkempiRecord(st, chain_A, chain_B, mutations)
+    f = get_features(r.struct, r.mutations)
     print(f)

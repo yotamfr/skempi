@@ -1,6 +1,5 @@
 import os
 import sys
-import shutil
 from skempi_consts import *
 
 BINDPROFX_HOME = "../../BindProfX/bin"
@@ -35,7 +34,7 @@ class Alignment(object):
         assert lines[5] == "Alignments:\n"
         self.body = [lines[6]]
         i = 1
-        while float(lines[6 + i].split()[5]) >= threshold:
+        while 6 + i < len(lines) and float(lines[6 + i].split()[5]) >= threshold:
             self.body.append(lines[6 + i])
             i += 1
 
@@ -64,8 +63,7 @@ def bindprofx(skempi_record, bindprofx_home=BINDPROFX_HOME, bindprofx_data=BINDP
     if not osp.exists(src):
         os.system("%s/XBindProf/run_align.pl %s/complex.pdb 0.5 %s"
                   % (bindprofx_home, ws, src))
-    shutil.copy(src, dst)
-    Alignment(dst).to_file(dst)
+    Alignment(src).to_file(dst)
     with open("%s/mutList.txt" % ws, "w+") as f:
         f.write(str(mutlist))
     cline = "%s %s/get_final_score.py %s" % (sys.executable, bindprofx_home, ws)
