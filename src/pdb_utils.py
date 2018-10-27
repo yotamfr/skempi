@@ -180,6 +180,9 @@ class Residue(object):
     def __hash__(self):
         return hash((self.chain, self.num, self._name))
 
+    def __eq__(self, other):
+        return hash(self) == hash(other)
+
     def __str__(self):
         return "<Residue %s:%d>" % (self._name, self.num)
 
@@ -255,13 +258,13 @@ class PDB(object):
             yield chain
 
     def __hash__(self):
-        return hash(self._id)
+        return hash(str(self))
 
     def __getitem__(self, chain_id):
         return self._chains[self._id_to_ix[chain_id]]
 
     def __str__(self):
-        return "<PDB %s>" % self.pdb
+        return "<%s: %s>" % (self.pdb, ','.join([c.chain_id for c in self._chains]))
 
     def to_pdb(self, path):
         lines = []

@@ -6,16 +6,6 @@ PDB_PATH = osp.join("..", "data", "pdbs")
 SKMEPI2_PDBs = osp.join('..', 'data', 'PDBs')
 
 
-try:
-    skempi_df = pd.read_excel(osp.join('..', 'data', 'SKEMPI_1.1.xlsx'))
-    skempi_df["num_chains"] = skempi_df.Protein.str.slice(start=6).apply(len).values
-    skempi_df["num_muts"] = skempi_df['Mutation(s)_cleaned'].str.split(',').apply(len).values
-
-except IOError as e:
-    print("warning: %s" % e)
-    skempi_df = None
-
-
 NUM_GROUPS = 5
 
 

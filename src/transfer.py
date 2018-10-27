@@ -251,7 +251,7 @@ if __name__ == "__main__":
     non_blocking_producer = non_blocking_producer_ddg_v1
     get_loss = get_loss
 
-    records = load_skempi(skempi_df, PDB_PATH, True, True)
+    records = load_skempi(skempi_df, PDB_PATH, True)
     indx1 = skempi_df.Protein.isin(G1 + G2 + G3 + G4 + G5)
     indx2 = (skempi_df.num_muts == 1)
     training_set = np.asarray(records)[indx1 & indx2]

@@ -12,6 +12,7 @@ def delta_sasa(chainA, chainB, path_to_pdb):
     args = [STRIDE_EXE, path_to_pdb, '-r%s%s' % (chainA, chainB)]
     proc0 = subprocess.Popen(args, stdout=subprocess.PIPE)
     df_complex = parse_stride(proc0.stdout)
+    # assert proc0.returncode == 0
     args = [STRIDE_EXE, path_to_pdb, '-r%s' % (chainA,)]
     proc1 = subprocess.Popen(args, stdout=subprocess.PIPE)
     try: df_a = parse_stride(proc1.stdout)
@@ -25,8 +26,10 @@ def delta_sasa(chainA, chainB, path_to_pdb):
     asa_a, asa_b = list(df_a.ASA), list(df_b.ASA)
     asa = np.asarray(list(df_complex.ASA))
     assert np.all(ress == np.asarray(sorted(ress_a + ress_b)))
-    # assert np.any(np.asarray(asa_a + asa_b) != asa)
+    assert np.any(np.asarray(asa_a + asa_b) != asa)
     df_complex["ASA_Chain"] = np.asarray(asa_a + asa_b)
+    # assert proc1.returncode == 0
+    # assert proc2.returncode == 0
     return df_complex
 
 

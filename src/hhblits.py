@@ -340,6 +340,6 @@ if __name__ == "__main__":
 
     fasta_fname = args.input_file
     fasta_src = parse_fasta(open(fasta_fname, 'r'), 'fasta')
-    seqs = [(r.id, str(r.seq)) for r in fasta_src]
+    seqs = reversed([(r.id, str(r.seq)) for r in fasta_src])
     db.skempi.create_index("updated_at")
     func(seqs, db.skempi)

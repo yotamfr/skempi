@@ -58,7 +58,7 @@ def bindprofx(skempi_record, bindprofx_home=BINDPROFX_HOME, bindprofx_data=BINDP
         os.makedirs(ws)
     struct.to_pdb("%s/complex.pdb" % ws)
     result_path = "%s/result.txt" % ws
-    src = "%s/align/%s.aln" % (bindprofx_data, struct.pdb)
+    src = "%s/align/%s.aln" % (bindprofx_data, skempi_record.pdb)
     dst = "%s/align.out" % ws
     if not osp.exists(src):
         os.system("%s/XBindProf/run_align.pl %s/complex.pdb 0.5 %s"

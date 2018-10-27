@@ -6,8 +6,9 @@ from tqdm import tqdm
 from StringIO import StringIO
 from concurrent.futures import *
 from collections import deque
-
+from itertools import product
 from grid_utils import *
+from skempi_lib import *
 
 np.seterr("raise")
 
@@ -76,7 +77,14 @@ class PdbLoader(object):
 
 
 class PdbReader(object):
-    def __init__(self, producer, list_of_pdbs, rotations=[None], repo=PDB_ZIP, step=10, num_voxels=20):
+    def __init__(self,
+                 producer,
+                 list_of_pdbs,
+                 rotations=(None,),
+                 repo=PDB_ZIP,
+                 step=10,
+                 num_voxels=20):
+
         self._list_of_pdbs = list_of_pdbs
         self._p = np.random.permutation(len(list_of_pdbs))
         self._step = step
@@ -89,7 +97,7 @@ class PdbReader(object):
         self.reset()
 
     def reset(self):
-        self._pdb_ix = -1
+        self._ix_pdb = -1
         self.struct = None
         self.load_next_struct()
 
@@ -97,37 +105,37 @@ class PdbReader(object):
         return parse_pdb(pdb, StringIO(self._repo.read("pdbs/%s.pdb" % pdb)))
 
     def load_next_struct(self):
-        self._pdb_ix += 1
-        if self._pdb_ix == len(self._p):
+        self._ix_pdb += 1
+        if self._ix_pdb == len(self._p):
             raise StopIteration
         try:
             self.struct = self.read_pdb(self.curr_pdb)
-            self._chain_ix = 0
-            self._res_ix = 0
+            self._ix_chain = 0
+            self._ix_res = 0
         except (KeyError, NotImplementedError):   # key errors are thrown by read_pdb
             self.load_next_struct()
 
     @property
     def curr_pdb(self):
-        return self._list_of_pdbs[self._p[self._pdb_ix]]
+        return self._list_of_pdbs[self._p[self._ix_pdb]]
 
     @property
     def curr_chain(self):
-        return self.struct._chains[self._chain_ix]
+        return self.struct._chains[self._ix_chain]
 
     def read(self):
 
-        if self._res_ix + self._step < len(self.curr_chain):
-            self._res_ix += self._step
-        elif self._chain_ix + 1 < len(self.struct._chains):
-            self._chain_ix += 1
-            self._res_ix = 0
+        if self._ix_res + self._step < len(self.curr_chain):
+            self._ix_res += self._step
+        elif self._ix_chain + 1 < len(self.struct._chains):
+            self._ix_chain += 1
+            self._ix_res = 0
         else:
             self.load_next_struct()
             return self.read()
 
         struct = self.struct
-        res = self.curr_chain[self._res_ix]
+        res = self.curr_chain[self._ix_res]
 
         if res.ca is None:
             return self.read()
@@ -161,6 +169,98 @@ def non_blocking_producer_v3(queue, struct, res, rotations, nv=20):
         voxels = get_4channel_voxels_around_res(atoms, res, rot, nv=nv)
         descriptors = np.concatenate([descriptors2, descriptors1], axis=0)
         queue.appendleft([voxels, descriptors])
+
+
+class SkempiReader(PdbReader):
+    def __init__(self,
+                 producer,
+                 interfaces,
+                 ddg_mapper,
+                 rotations=(None,),
+                 repo=PDB_ZIP,
+                 step=5,
+                 num_voxels=20):
+
+        super(SkempiReader, self).__init__(producer, interfaces, rotations, repo, step, num_voxels)
+        self.ddg_mapper = ddg_mapper
+
+    def reset(self):
+        self._ix_pdb = -1
+        self.struct = None
+        self.load_next_struct()
+
+    def read_pdb(self, interface):
+        pdb, chains_a, chains_b = tuple(interface.split('_'))
+        st = parse_pdb(pdb, StringIO(self._repo.read("pdbs/%s.pdb" % pdb.lower())))
+        return SkempiStruct(st, chains_a, chains_b)
+
+    def load_next_struct(self):
+        self._ix_pdb += 1
+        if self._ix_pdb == len(self._p):
+            raise StopIteration
+        try:
+            self.struct = self.read_pdb(self.curr_pdb)
+            self._ix_chain = 0
+            self._ix_res = 0
+        except (KeyError, NotImplementedError):   # key errors are thrown by read_pdb
+            self.load_next_struct()
+
+    def read(self):
+        if self._ix_res + self._step < len(self.curr_chain):
+            self._ix_res += self._step
+        elif self._ix_chain + 1 < len(self.struct._chains):
+            self._ix_chain += 1
+            self._ix_res = 0
+        else:
+            self.load_next_struct()
+            return self.read()
+
+        struct = self.struct
+        res = self.curr_chain[self._ix_res]
+
+        if res.ca is None:
+            return self.read()
+
+        assert res.index == self._ix_res
+        assert res.chain_id == self.curr_chain.chain_id
+
+        self.E.submit(self.func, struct, res, self)
+
+
+def non_blocking_interface_producer(struct, res, reader):
+    nv = reader.nv
+    name, c, i = res.name, res.chain_id, res.index + 1
+    mutations = [Mutation("%s%s%d%s" % (name, c, i, m)) for m in amino_acids if m != res.name]
+    assert len(mutations) == 19
+    atoms = select_atoms_in_sphere(struct.atoms, res.ca.coord, nv)
+    for rot, mut in product(reader.rotations, mutations):
+        record = SkempiRecord(struct, [mut], load_mutant=False)
+        ddg = reader.ddg_mapper(record)
+        oh = get_counts([mut]).values()
+        ca, cb = struct.chains_a, struct.chains_b
+        vox = get_8channel_voxels_around_res(atoms, ca, cb, res, rot, nv=nv)
+        reader.Q.appendleft([vox, oh, ddg])
+
+
+def non_blocking_siamese_interface_producer(struct, res, reader):
+    nv = reader.nv
+    name, c, i = res.name, res.chain_id, res.index + 1
+    mutations = [Mutation("%s%s%d%s" % (name, c, i, m)) for m in amino_acids if m != res.name]
+    assert len(mutations) == 19
+    for rot, mut in product(reader.rotations, mutations):
+        record = SkempiRecord(struct, [mut], load_mutant=False)
+        ddg = reader.ddg_mapper(record)
+        oh = get_counts([mut]).values()
+        record.init_mutant()
+        struct, mutant = record.struct, record.mutant
+        res1 = struct[mut.chain_id][mut.i]
+        res2 = mutant[mut.chain_id][mut.i]
+        atoms1 = select_atoms_in_sphere(struct.atoms, res1.ca.coord, nv)
+        atoms2 = select_atoms_in_sphere(mutant.atoms, res2.ca.coord, nv)
+        ca, cb = struct.chains_a, struct.chains_b
+        vox1 = get_8channel_voxels_around_res(atoms1, ca, cb, res1, rot, nv=nv)
+        vox2 = get_8channel_voxels_around_res(atoms2, ca, cb, res2, rot, nv=nv)
+        reader.Q.appendleft([vox1, vox2, oh, ddg])
 
 
 if __name__ == "__main__":

@@ -22,6 +22,21 @@ def get_4channel_voxels_around_res(atoms, res, R, nv=20):
     return np.stack([c1, c2, c3, c4], axis=0)
 
 
+def get_8channel_voxels_around_res(atoms, ca, cb, res, R, nv=20):
+    atoms_r = [a for a in atoms if a.res == res]
+    atoms_a = [a for a in atoms if a.chain_id in ca]
+    atoms_b = [a for a in atoms if a.chain_id in cb]
+    mkAB = get_3d_voxels_around_res(atoms, res, ones, rot=R, num_voxels=nv, atom_types=['C', 'N', 'O', 'S'])
+    mkA = get_3d_voxels_around_res(atoms_a, res, ones, rot=R, num_voxels=nv, atom_types=['C', 'N', 'O', 'S'])
+    mkB = get_3d_voxels_around_res(atoms_b, res, ones, rot=R, num_voxels=nv, atom_types=['C', 'N', 'O', 'S'])
+    mkR = get_3d_voxels_around_res(atoms_r, res, ones, rot=R, num_voxels=nv, atom_types=['C', 'N', 'O', 'S'])
+    ch1 = get_3d_voxels_around_res(atoms, res, ones, rot=R, num_voxels=nv, atom_types=['C'])
+    ch2 = get_3d_voxels_around_res(atoms, res, ones, rot=R, num_voxels=nv, atom_types=['N'])
+    ch3 = get_3d_voxels_around_res(atoms, res, ones, rot=R, num_voxels=nv, atom_types=['O'])
+    ch4 = get_3d_voxels_around_res(atoms, res, ones, rot=R, num_voxels=nv, atom_types=['S'])
+    return np.stack([mkR, mkAB, mkA, mkB, ch1, ch2, ch3, ch4], axis=0)
+
+
 # def hydrophobicity(atoms, atom_types):
 #     return np.asarray([ARGP820101[a.res.name] for a in atoms if a.type in atom_types])
 #

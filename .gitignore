@@ -11,11 +11,11 @@ stride/
 src/stride
 src/modeller
 
-
 dbs/
 data/
 docs/
 csvs/
+cdhit/
 hhblits/
 skempi2/
 src/bindprofx/
