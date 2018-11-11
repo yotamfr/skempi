@@ -1,6 +1,14 @@
 import os
+import os.path as osp
 import sys
-from skempi_consts import *
+import shutil
+import subprocess
+import pandas as pd
+from concurrent.futures import *
+
+E = ThreadPoolExecutor(8)
+
+FOLDX4_HOME = "../../BindProfX/bin/FoldX"
 
 BINDPROFX_HOME = "../../BindProfX/bin"
 
@@ -71,5 +79,66 @@ def bindprofx(skempi_record, bindprofx_home=BINDPROFX_HOME, bindprofx_data=BINDP
     return get_bpx_score(result_path)
 
 
+def foldx4(skempi_record, foldx4_home=FOLDX4_HOME):
+    if skempi_record.struct.num_chains > 2:
+        return None
+    st = skempi_record.struct
+    mutations = skempi_record.mutations
+    chains = ','.join([c for c in st.chains_a + st.chains_b])
+
+    if not osp.exists('foldx4'):
+        os.mkdir('foldx4')
+        shutil.copy("%s/rotabase.txt" % foldx4_home, 'foldx4')
+        shutil.copy("%s/runFoldX.py" % foldx4_home, 'foldx4')
+        shutil.copy("%s/foldx" % foldx4_home, 'foldx4')
+
+    pdb = st.protein
+    muts = "%s" % "_".join([str(m) for m in mutations])
+    ws = osp.abspath("foldx4/%s/%s" % (pdb, muts))
+    if osp.exists("%s/score.txt" % ws):
+        return get_bpx_score("%s/score.txt" % (ws,))
+    if not osp.exists(ws):
+        os.makedirs(ws)
+
+    if not osp.exists("%s/complex.pdb" % (ws,)):
+        st.to_pdb("%s/complex.pdb" % (ws,))
+    with open("%s/mut_list.txt" % (ws,), "w+") as f:
+        f.write("%s;\n" % ";".join([str(m) for m in mutations]))
+
+    cline = "../../runFoldX.py complex.pdb mut_list.txt %s score.txt" % (chains,)
+    try:
+        p = subprocess.Popen(cline.split(), cwd=ws, stdout=open(os.devnull, 'w'), stderr=subprocess.STDOUT)
+        p.communicate()
+        assert p.returncode == 0
+        score = get_bpx_score("%s/score.txt" % (ws,))
+    except (AssertionError,) as e:
+        score = None
+    return score
+
+
 if __name__ == "__main__":
-    pass
+    from skempi_lib import *
+    from tqdm import tqdm
+    from time import sleep
+    lim = None
+    records = load_skempi(skempi_df_v2[:lim], SKMEPI2_PDBs, False, 0)
+    tasks = [E.submit(foldx4, r) for r in records]
+    pbar, f4x = tqdm(total=len(records), desc="records processed"), {}
+    stop = False
+    while not stop:
+        stop = True
+        for t, r in zip(tasks, records):
+            if t.done():
+                if r not in f4x:
+                    f4x[r] = t.result()
+                    pbar.update(1)
+            else:
+                stop = False
+        sleep(1)
+    pbar.close()
+    df = pd.DataFrame({"Protein": [r.struct.protein for r in records],
+                       "FoldX4": [f4x[r] for r in records],
+                       "DDG": [r.ddg for r in records],
+                       "Mutation(s)_cleaned": [','.join([str(m) for m in r.mutations])
+                                               for r in records]})
+    df.to_csv("../data/skempi_v2_fold_x4.tsv", sep='\t', index=False)

@@ -60,7 +60,6 @@ class MSA(object):
 class Profile(object):
     def __init__(self, pdb, chain):
         uid = "%s_%s.prof" % (pdb, chain)
-        # df = pd.read_csv(osp.join("..", "data", 'skempiprofiles', uid), sep=' ')
         df = pd.read_csv(osp.join("..", "hhblits", uid), sep=',')
         self._profile = [df.loc[i].to_dict() for i in range(len(df))]
 
@@ -105,12 +104,20 @@ def get_stride(pdb_struct, ca, cb):
     return Stride(pd.read_csv(out_pth))
 
 
+def zscore_filter(ys):
+    eps = 10e-6
+    threshold = 3.5
+    median_y = np.median(ys)
+    median_absolute_deviation_y = np.median([np.abs(y - median_y) for y in ys]) + eps
+    modified_z_scores = [0.6745 * (y - median_y) / median_absolute_deviation_y for y in ys]
+    return np.asarray(ys)[(np.abs(modified_z_scores) <= threshold)]
+
+
 class SkempiStruct(PDB):
 
     def __init__(self, pdb_struct, chains_a, chains_b, profiles=None, alignments=None):
         cs = list(chains_a + chains_b)
         super(SkempiStruct, self).__init__(pdb_struct.pdb,
-                                           pdb_struct.atoms,
                                            pdb_struct._chains,
                                            dict(zip(cs, cs)))
         self.profiles = profiles
@@ -150,17 +157,10 @@ class SkempiStruct(PDB):
         return self.pdb
 
 
-def get_group(r, groups=[G1, G2, G3, G4, G5]):
-    try:
-        return map(lambda g: r.struct.protein in g, groups).index(True) + 1
-    except ValueError:
-        return 0
-
-
 class SkempiRecord(object):
 
-    def __init__(self, skempi_struct, mutations, ddg=[], load_mutant=True):
-        self.ddg_arr = ddg
+    def __init__(self, skempi_struct, mutations, ddg_arr=[], load_mutant=True):
+        self.ddg_arr = ddg_arr
         self.struct = skempi_struct
         self.mutant = None
         self.mutations = mutations
@@ -170,7 +170,7 @@ class SkempiRecord(object):
 
     @property
     def ddg(self):
-        return np.mean(self.ddg_arr)
+        return np.mean(zscore_filter(self.ddg_arr))
 
     @property
     def pdb(self):
@@ -251,10 +251,8 @@ class DDGMapper(object):
 
 def parse_mutations(mutations_str, reverse=False, sep=','):
     mutations = [Mutation(s) for s in mutations_str.split(sep)]
-    if reverse:
-        return [reversed(mut) for mut in mutations]
-    else:
-        return mutations
+    if reverse: return [reversed(mut) for mut in mutations]
+    else: return mutations
 
 
 def comp_cp_in_shell(mut, struct, mat, inner, outer):
@@ -384,8 +382,11 @@ def agg_multiple_scores_to_one(scores):
     return np.max(scores) + np.min(scores) - np.mean(scores)
 
 
-def compute_score(score_func, struct, mutations, agg=agg_multiple_scores_to_one, alpha=0.9):
-    return agg([(alpha * ac_ratio(struct, m.chain_id, m.i) + 1 - alpha) * score_func(struct, m) for m in mutations])
+def compute_score(score_func, struct, mutations, agg=agg_multiple_scores_to_one, with_ac=True):
+    if with_ac:
+        return agg([ac_ratio(struct, m.chain_id, m.i) * score_func(struct, m) for m in mutations])
+    else:
+        return agg([score_func(struct, m) for m in mutations])
 
 
 def get_features(struct, mutations):
@@ -395,6 +396,10 @@ def get_features(struct, mutations):
     feats["MaxASA"] = compute_score(score_asa, struct, mutations, agg=np.mean)
     feats["EVO"] = compute_score(score_evo, struct, mutations, agg=np.sum)
     feats["BI"] = compute_score(score_bi, struct, mutations, agg=np.sum)
+    feats["CP46"] = compute_score(score_cp46, struct, mutations, agg=np.sum)
+    feats["CP68"] = compute_score(score_cp68, struct, mutations, agg=np.sum)
+#     feats["BV"] = compute_score(score_bv, struct, mutations, agg=np.sum)
+#     feats["SK"] = compute_score(score_sk, struct, mutations, agg=np.sum)
     feats.update(get_counts(mutations))
     return feats
 
@@ -403,6 +408,10 @@ class Dataset(object):
 
     def __init__(self, records):
         self.records = records
+        self.init()
+
+    def init(self):
+        records = self.records
         self.X = np.asarray([r.features for r in records])
         self.df = pd.DataFrame([r.ddg for r in records], columns=["DDG"])
         self.df["Mutation"] = [','.join([str(m) for m in r.mutations]) for r in records]
@@ -414,8 +423,12 @@ class Dataset(object):
         return Dataset([reversed(r) for r in self.records])
 
     @property
+    def shape(self):
+        return self.X.shape
+
+    @property
     def y(self):
-        return self.df.DDG
+        return self.df.DDG.values
 
     @property
     def proteins(self):
@@ -435,10 +448,6 @@ class Dataset(object):
 
     def __getitem__(self, i):
         return self.records[i]
-
-    def __iter__(self):
-        for r in self.records:
-            yield r
 
     def __len__(self):
         return len(self.records)
@@ -469,12 +478,10 @@ def load_skempi(dataframe, path_to_pdbs, load_mut=True, min_seq_length=0):
     return records.values()
 
 
-def load_skempi_v1():
-    return load_skempi(skempi_df, PDB_PATH, True, 0)
+def load_skempi_v1(): return load_skempi(skempi_df, PDB_PATH, True, 0)
 
 
-def load_skempi_v2():
-    return load_skempi(skempi_df_v2, SKMEPI2_PDBs, True, 12)
+def load_skempi_v2(): return load_skempi(skempi_df_v2, SKMEPI2_PDBs, True, 0)
 
 
 def prepare_zemu():
@@ -513,15 +520,12 @@ def prepare_skempi_v2():
     cols = head.split(';')
     df = pd.DataFrame(data, columns=cols)
     df.Temperature = df.Temperature.replace(r'\(assumed\)', '', regex=True).replace(r'', '298', regex=False)
-    indx = (~df.Temperature.str.contains("(assumed)")) & (df.Temperature != '') & \
-           (df["Affinity_mut_parsed"] != '') & (df["Affinity_wt_parsed"] != '')
+    indx = (df.Temperature != '') & (df["Affinity_mut_parsed"] != '') & (df["Affinity_wt_parsed"] != '')
     df = df[indx].reset_index()
     df["Temperature"] = T = df.Temperature.astype(float).values
     df["num_mutations"] = np.asarray(num_mutations)[indx]
     df["Protein"] = df["#Pdb"]
     df["version"] = df["SKEMPI version\n"].astype(int)
-    # df.Temperature = T = df.Temperature.replace(r'\(assumed\)', '', regex=True)
-    # .replace(r'', '298', regex=False).astype(float).values
     R = (8.314 / 4184)
     df["dGwt"] = R * T * np.log(df["Affinity_wt_parsed"].astype(float).values)
     df["dGmut"] = R * T * np.log(df["Affinity_mut_parsed"].astype(float).values)

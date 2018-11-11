@@ -1,6 +1,5 @@
 import os.path as osp
-import pandas as pd
-import numpy as np
+import json
 
 PDB_PATH = osp.join("..", "data", "pdbs")
 SKMEPI2_PDBs = osp.join('..', 'data', 'PDBs')
@@ -51,5 +50,14 @@ G5 = [
     """.split(' ') if s.strip()]
 
 
+DIMER_GROUPS = json.load(open(osp.join('..', 'data', 'cdhit30_dimer_groups.json'), 'r')).values()
+
+CPLX_GROUPS = json.load(open(osp.join('..', 'data', 'cdhit30_all_groups.json'), 'r')).values()
+
+ZHANG_GROUPS = [G1, G2, G3, G4, G5]
+
 if __name__ == "__main__":
-    pass
+    for ig, G in enumerate(DIMER_GROUPS):
+        print(ig + 1, len(G))
+    for ig, G in enumerate(CPLX_GROUPS):
+        print(ig + 1, len(G))

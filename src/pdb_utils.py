@@ -225,12 +225,13 @@ class Chain(object):
 
 class PDB(object):
 
-    def __init__(self, modelname, atoms, chains=[], chain_dict={}):
+    def __init__(self, modelname, chains=[], chain_dict={}):
         self._id_to_ix = {}
         self._id = modelname
         self._chains = []
-        self._atoms = atoms
-        for _, c in enumerate(chains):
+        self._atoms = []
+
+        for c in chains:
             if len(chain_dict) > 0:
                 if c.chain_id not in chain_dict:
                     continue
@@ -240,6 +241,16 @@ class PDB(object):
                 cid = c.chain_id
             self._id_to_ix[cid] = len(self._chains)
             self._chains.append(c)
+            for res in c.residues:
+                self._atoms.extend(res.atoms)
+
+        for a in self._atoms:
+            if len(chain_dict) > 0:
+                a.res.chain = self[chain_dict[a.orig_chain]]
+            else:
+                a.res.chain = self[a.orig_chain]
+
+        assert not np.any([a.res.chain is None for a in self._atoms])
 
     @property
     def chains(self):
@@ -352,14 +363,8 @@ def parse_pdb(pdb, fd, chain_dict={}):
         line = fd.readline()
         atoms, residues, chains, chain_id, res_num = _handle_line(line, atoms, residues, chains, pdb, chain_id, res_num)
 
-    st = PDB(pdb, atoms, [c for c in chains if len(c) > 0], chain_dict)
-    for a in atoms:
-        if len(chain_dict) > 0:
-            a.res.chain = st[chain_dict[a.orig_chain]]
-        else:
-            a.res.chain = st[a.orig_chain]
+    st = PDB(pdb, [c for c in chains if len(c) > 0], chain_dict)
 
-    assert not np.any([a.res.chain is None for a in atoms])
     return st
 
 
