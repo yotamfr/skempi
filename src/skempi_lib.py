@@ -257,7 +257,7 @@ def parse_mutations(mutations_str, reverse=False, sep=','):
 
 def comp_cp_in_shell(mut, struct, mat, inner, outer):
     res = struct[mut.chain_id][mut.i]
-    cp_A, cp_B = get_cp_in_shell_around_res(res, struct.atoms, inner, outer, mat, ['C'])
+    cp_A, cp_B = get_cp_in_shell_around_res(res, struct.atoms, inner, outer, mat)
     return cp_A[mut.m], cp_B[mut.m]
 
 
@@ -267,7 +267,7 @@ def get_cps_shell(struct, mutations, inner, outer, mat=BASU010101):
 
 def comp_cp_in_sphere(mut, struct, mat, rad):
     res = struct[mut.chain_id][mut.i]
-    cp_A, cp_B = get_cp_in_sphere_around_res(res, struct.atoms, rad, mat, ['C'])
+    cp_A, cp_B = get_cp_in_sphere_around_res(res, struct.atoms, rad, mat)
     return cp_A[mut.m], cp_B[mut.m]
 
 
@@ -302,8 +302,7 @@ def get_counts(mutations):
 def score_cp(struct, mut, inner, outer, mat=BASU010101):
     w, m = mut.w, mut.m
     center_res = struct[mut.chain_id][mut.i]
-    center = center_res.ca.coord
-    neighbors = get_atoms_in_shell_around_center(center, struct.atoms, inner, outer, ['C'])
+    neighbors = get_atoms_in_shell_around_center(center_res.ca.coord, struct.atoms, inner, outer, CNOS)
     residues_indices = set([(a.res.chain_id, a.res.index) for a in neighbors
                             if a.res.chain.chain_id != mut.chain_id])
     return sum([sum([struct.get_profile(A)[(j, a)] * (mat[(a, m)] - mat[(a, w)])
@@ -318,11 +317,10 @@ def score_cp68(struct, mut, mat=BASU010101):
     return score_cp(struct, mut, 6.0, 8.0, mat=mat)
 
 
-def score_bv(struct, mut, PBV=BASU010101, rad=8.0):
+def score_bv(struct, mut, PBV=BASU010101, rad=4.0):
     w, m = mut.w, mut.m
     center_res = struct[mut.chain_id][mut.i]
-    center = center_res.ca.coord
-    neighbors = get_atoms_in_sphere_around_center(center, struct.atoms, rad, ['C'])
+    neighbors = get_atoms_in_sphere_around_res(center_res, struct.atoms, rad, CNOS)
     residues_indices = set([(a.res.chain_id, a.res.index) for a in neighbors])
     return sum([sum([struct.get_profile(A)[(j, a)] * (PBV[(a, m)] - PBV[(a, w)])
                      for a in amino_acids]) for A, j in residues_indices])
@@ -392,15 +390,15 @@ def compute_score(score_func, struct, mutations, agg=agg_multiple_scores_to_one,
 def get_features(struct, mutations):
     feats = dict()
     feats["Hp"] = compute_score(score_hp, struct, mutations, agg=np.mean)
-    feats["Mw"] = compute_score(score_molweight, struct, mutations, agg=np.mean)
-    feats["MaxASA"] = compute_score(score_asa, struct, mutations, agg=np.mean)
+    # feats["Mw"] = compute_score(score_molweight, struct, mutations, agg=np.mean)
+    # feats["MaxASA"] = compute_score(score_asa, struct, mutations, agg=np.mean)
     feats["EVO"] = compute_score(score_evo, struct, mutations, agg=np.sum)
     feats["BI"] = compute_score(score_bi, struct, mutations, agg=np.sum)
-    feats["CP46"] = compute_score(score_cp46, struct, mutations, agg=np.sum)
-    feats["CP68"] = compute_score(score_cp68, struct, mutations, agg=np.sum)
-#     feats["BV"] = compute_score(score_bv, struct, mutations, agg=np.sum)
-#     feats["SK"] = compute_score(score_sk, struct, mutations, agg=np.sum)
-    feats.update(get_counts(mutations))
+    # feats["CP46"] = compute_score(score_cp46, struct, mutations, agg=np.sum)
+    # feats["CP68"] = compute_score(score_cp68, struct, mutations, agg=np.sum)
+    feats["BV"] = compute_score(score_bv, struct, mutations, agg=np.sum)
+    feats["SK"] = compute_score(score_sk, struct, mutations, agg=np.sum)
+#     feats.update(get_counts(mutations))
     return feats
 
 

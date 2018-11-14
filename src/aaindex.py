@@ -359,6 +359,10 @@ MaxASA_theory = {
 }
 
 if __name__ == "__main__":
+    import numpy as np
+    keys = [(a1, a2) for a1 in amino_acids for a2 in amino_acids]
+    min_key = keys[np.argmin([BASU010101[k] for k in keys])]
+    print(min_key, BASU010101[min_key])
     print(BASU010101[('A', 'R')])
     print(SKOJ970101[('A', 'K')])
     print(ARGP820101['A'])

@@ -9,6 +9,12 @@ from aaindex import *
 
 VDW = {'C': 1.7, 'O': 1.52, 'N': 1.55, 'S': 1.8}
 
+BACKBONE_ATOMS = ['CA', 'C', 'N', 'O']
+
+CNOS = ["C", "N", "O", "S"]
+
+MAX_DISTANCE_CUTOFF = 15.0
+
 
 def ones(atoms, atom_types):
     return np.asarray([1 for a in atoms if a.type in atom_types])
@@ -26,10 +32,10 @@ def get_8channel_voxels_around_res(atoms, ca, cb, res, R, nv=20):
     atoms_r = [a for a in atoms if a.res == res]
     atoms_a = [a for a in atoms if a.chain_id in ca]
     atoms_b = [a for a in atoms if a.chain_id in cb]
-    mkAB = get_3d_voxels_around_res(atoms, res, ones, rot=R, num_voxels=nv, atom_types=['C', 'N', 'O', 'S'])
-    mkA = get_3d_voxels_around_res(atoms_a, res, ones, rot=R, num_voxels=nv, atom_types=['C', 'N', 'O', 'S'])
-    mkB = get_3d_voxels_around_res(atoms_b, res, ones, rot=R, num_voxels=nv, atom_types=['C', 'N', 'O', 'S'])
-    mkR = get_3d_voxels_around_res(atoms_r, res, ones, rot=R, num_voxels=nv, atom_types=['C', 'N', 'O', 'S'])
+    mkAB = get_3d_voxels_around_res(atoms, res, ones, rot=R, num_voxels=nv, atom_types=CNOS)
+    mkA = get_3d_voxels_around_res(atoms_a, res, ones, rot=R, num_voxels=nv, atom_types=CNOS)
+    mkB = get_3d_voxels_around_res(atoms_b, res, ones, rot=R, num_voxels=nv, atom_types=CNOS)
+    mkR = get_3d_voxels_around_res(atoms_r, res, ones, rot=R, num_voxels=nv, atom_types=CNOS)
     ch1 = get_3d_voxels_around_res(atoms, res, ones, rot=R, num_voxels=nv, atom_types=['C'])
     ch2 = get_3d_voxels_around_res(atoms, res, ones, rot=R, num_voxels=nv, atom_types=['N'])
     ch3 = get_3d_voxels_around_res(atoms, res, ones, rot=R, num_voxels=nv, atom_types=['O'])
@@ -77,8 +83,16 @@ def select_atoms_in_sphere(atoms, center, r):
     return np.asarray(atoms)[indx]
 
 
-def get_descriptors_in_shell(atoms, res, descriptor_from_residues, inner, outer, atom_types=['C']):
-    atoms = np.asarray([a for a in atoms if a.type in atom_types])
+def select_atoms_in_shell(center, atoms, inner, outer):
+    assert outer > inner
+    X = np.asarray([a.coord for a in atoms]) - center
+    indx_inn = np.where(X[:, 0] ** 2 + X[:, 1] ** 2 + X[:, 2] ** 2 >= inner ** 2)
+    indx_out = np.where(X[:, 0] ** 2 + X[:, 1] ** 2 + X[:, 2] ** 2 <= outer ** 2)
+    indx = reduce(np.intersect1d, [indx_inn, indx_out])
+    return np.asarray(atoms)[indx]
+
+
+def get_descriptors_in_shell(atoms, res, descriptor_from_residues, inner, outer):
     X = np.asarray([a.coord for a in atoms]) - res.ca.coord
     indx_in = np.where(X[:, 0] ** 2 + X[:, 1] ** 2 + X[:, 2] ** 2 >= inner ** 2)
     indx_out = np.where(X[:, 0] ** 2 + X[:, 1] ** 2 + X[:, 2] ** 2 <= outer ** 2)
@@ -87,27 +101,35 @@ def get_descriptors_in_shell(atoms, res, descriptor_from_residues, inner, outer,
     return descriptor_from_residues(res, residues)
 
 
-def get_atoms_in_sphere_around_center(center, atoms, rad, atom_types=["C"]):
-    atoms = np.asarray([a for a in atoms if a.type in atom_types])
-    X = np.asarray([a.coord for a in atoms]) - center
-    indx = np.where(X[:, 0] ** 2 + X[:, 1] ** 2 + X[:, 2] ** 2 <= rad ** 2)
-    return atoms[indx]
+def get_atoms_in_sphere_around_center(center, atoms, rad, atom_types=CNOS):
+    return select_atoms_in_sphere([a for a in atoms if a.type in atom_types], center, rad)
 
 
-def get_atoms_in_shell_around_center(center, atoms, inner, outer, atom_types=["C"]):
-    assert outer > inner
-    atoms = np.asarray([a for a in atoms if a.type in atom_types])
-    X = np.asarray([a.coord for a in atoms]) - center
-    indx_inn = np.where(X[:, 0] ** 2 + X[:, 1] ** 2 + X[:, 2] ** 2 >= inner ** 2)
-    indx_out = np.where(X[:, 0] ** 2 + X[:, 1] ** 2 + X[:, 2] ** 2 <= outer ** 2)
-    indx = reduce(np.intersect1d, [indx_inn, indx_out])
-    return atoms[indx]
+def get_atoms_in_sphere_around_res(res, atoms, rad, ignore_list=BACKBONE_ATOMS):
+    neighbors = set()
+    atoms = select_atoms_in_sphere(atoms, res.ca.coord, MAX_DISTANCE_CUTOFF)    # save time heuristic
+    for c in [a for a in res.atoms if a.name not in ignore_list]:
+        hits = get_atoms_in_sphere_around_center(c.coord, atoms, rad, atom_types=CNOS)
+        neighbors.update(hits)
+    return list(neighbors)
 
 
-def get_cp_in_shell_around_res(center_res, atoms, inner, outer, M=BASU010101, atom_types=["C"]):
+def get_atoms_in_shell_around_center(center, atoms, inner, outer, atom_types=CNOS):
+    return select_atoms_in_shell(center, [a for a in atoms if a.type in atom_types], inner, outer)
+
+
+def get_atoms_in_shell_around_res(res, atoms, inner, outer, ignore_list=BACKBONE_ATOMS):
+    neighbors = set()
+    atoms = select_atoms_in_sphere(atoms, res.ca.coord, MAX_DISTANCE_CUTOFF)    # save time heuristic
+    for c in [a for a in res.atoms if a.name not in ignore_list]:
+        hits = get_atoms_in_shell_around_center(c.coord, atoms, inner, outer, atom_types=CNOS)
+        neighbors.update(hits)
+    return list(neighbors)
+
+
+def get_cp_in_shell_around_res(center_res, atoms, inner, outer, M=BASU010101):
     i, w, A = center_res.index, center_res.name, center_res.chain.chain_id
-    center = center_res.ca.coord
-    neighbors = get_atoms_in_shell_around_center(center, atoms, inner, outer, atom_types)
+    neighbors = get_atoms_in_sphere_around_center(center_res.ca.coord, atoms, inner, outer)
     residues = set([a.res for a in neighbors])
     indices_A = [(res.index, res.name) for res in residues if res.chain.chain_id == A and res.index != i]
     indices_B = [(res.index, res.name) for res in residues if res.chain.chain_id != A]
@@ -116,10 +138,9 @@ def get_cp_in_shell_around_res(center_res, atoms, inner, outer, M=BASU010101, at
     return cp_A, cp_B
 
 
-def get_cp_in_sphere_around_res(center_res, atoms, rad, M=BASU010101, atom_types=["C"]):
+def get_cp_in_sphere_around_res(center_res, atoms, rad, M=BASU010101):
     i, w, A = center_res.index, center_res.name, center_res.chain.chain_id
-    center = center_res.ca.coord
-    neighbors = get_atoms_in_sphere_around_center(center, atoms, rad, atom_types)
+    neighbors = get_atoms_in_sphere_around_center(center_res.ca.coord, atoms, rad)
     residues = set([a.res for a in neighbors])
     indices_A = [(res.index, res.name) for res in residues if res.chain.chain_id == A and res.index != i]
     indices_B = [(res.index, res.name) for res in residues if res.chain.chain_id != A]

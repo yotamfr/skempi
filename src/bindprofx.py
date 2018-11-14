@@ -58,14 +58,21 @@ def get_bpx_score(result_path):
 
 
 def bindprofx(skempi_record, bindprofx_home=BINDPROFX_HOME, bindprofx_data=BINDPROFX_DATA):
+
     struct = skempi_record.struct
+    if struct.num_chains > 2:
+        return None
+    ws = "bindprofx/%s" % struct.modelname
+    result_path = "%s/result.txt" % ws
+    if osp.exists(result_path):
+        return get_bpx_score(result_path)
     mutations = skempi_record.mutations
     mutlist = MutList(mutations)
-    ws = "bindprofx/%s" % struct.modelname
+
     if not osp.exists(ws):
         os.makedirs(ws)
     struct.to_pdb("%s/complex.pdb" % ws)
-    result_path = "%s/result.txt" % ws
+
     src = "%s/align/%s.aln" % (bindprofx_data, skempi_record.pdb)
     dst = "%s/align.out" % ws
     if not osp.exists(src):
