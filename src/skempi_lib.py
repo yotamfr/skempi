@@ -14,6 +14,9 @@ from grid_utils import *
 from skempi_consts import *
 
 
+BACKBONE_ATOMS = ['CA', 'C', 'N', 'O']
+
+
 class MSA(object):
     def __init__(self, pdb, chain):
         uid = "%s_%s.aln" % (pdb, chain)
@@ -320,7 +323,7 @@ def score_cp68(struct, mut, mat=BASU010101):
 def score_bv(struct, mut, PBV=BASU010101, rad=4.0):
     w, m = mut.w, mut.m
     center_res = struct[mut.chain_id][mut.i]
-    neighbors = get_atoms_in_sphere_around_res(center_res, struct.atoms, rad, CNOS)
+    neighbors = get_atoms_in_sphere_around_res(center_res, struct.atoms, rad)
     residues_indices = set([(a.res.chain_id, a.res.index) for a in neighbors])
     return sum([sum([struct.get_profile(A)[(j, a)] * (PBV[(a, m)] - PBV[(a, w)])
                      for a in amino_acids]) for A, j in residues_indices])
@@ -402,10 +405,58 @@ def get_features(struct, mutations):
     return feats
 
 
+class Interaction(object):
+
+    def __init__(self, atom_a, atom_b, dist=None):
+        self.atom_a = atom_a
+        self.atom_b = atom_b
+        self._dist = dist
+
+    @property
+    def dist(self):
+        if self._dist is None:
+            a, b = self.atom_a, self.atom_b
+            self._dist = math.sqrt(sum([(x1-x2)**2 for x1, x2 in zip(a.coord, b.coord)]))
+        return self._dist
+
+    def __eq__(self, other):
+        return \
+            ((self.atom_a == other.atom_a) and (self.atom_b == other.atom_b)) or \
+            ((self.atom_a == other.atom_b) and (self.atom_b == other.atom_a))
+
+    @property
+    def descriptor(self):
+        a, b = self.atom_a, self.atom_b
+        at1, at2 = ATOM_TYPES.index(a.type) + 1, ATOM_TYPES.index(b.type) + 1
+        ap1, ap2 = ATOM_POSITIONS.index(a.pos) + 1, ATOM_POSITIONS.index(b.pos) + 1
+        aa1, aa2 = amino_acids.index(a.res.name) + 1, amino_acids.index(b.res.name) + 1
+        return [aa1, aa2, at1, at2, ap1, ap2, self.dist]
+
+    def __str__(self):
+        a, b = self.atom_a, self.atom_b
+        return "%s:%s--(%.3f)--%s:%s" % (a.res._name, a.name, self.dist, b.name, b.res._name)
+
+
+def get_interactions(struct, mut, rad=4.0, ignore_list=BACKBONE_ATOMS):
+    from sklearn.metrics.pairwise import euclidean_distances as dist
+    center_res = struct[mut.chain_id][mut.i]
+    assert center_res.name == mut.w or center_res.name == mut.m
+    X = [a.coord for a in center_res.atoms]
+    residues = list(set([a.res for a in get_atoms_in_sphere_around_res(center_res, struct.atoms, rad)]))
+    envs = [dist(X, [a.coord for a in rr.atoms]) for rr in residues]
+    indices = [np.unravel_index(np.argmin(e, axis=None), e.shape) for e in envs]
+    interactions = [Interaction(center_res[i], residues[k][j], envs[k][i, j]) for k, (i, j) in enumerate(indices)]
+    filtered_interactions = [ii for ii in interactions if ii.atom_a.name not in ignore_list]
+    # if len([str(i) for i in interactions if 1.8 <= i.dist <= 2.2]):
+    # print(str(interactions[0].atom_a.res.chain), str(interactions[0].atom_a))
+    # print(len(filtered_interactions), [str(i) for i in filtered_interactions])
+    return filtered_interactions
+
+
 class Dataset(object):
 
     def __init__(self, records):
-        self.records = records
+        self.records = np.asarray(records)
         self.init()
 
     def init(self):

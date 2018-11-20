@@ -1,17 +1,6 @@
 import os
-
 import torch
-from torch import nn
-
-import torch.nn.functional as F
-
-from torch.autograd import Variable
-
 import numpy as np
-
-VERBOSE = True
-
-USE_CUDA = True
 
 
 def model_summary(model):
@@ -50,7 +39,7 @@ class AdaptiveLR(object):
         self.opt = opt
         self.losses = []
         self.window = num_iterations
-        self.min_lr = 0.000001
+        self.min_lr = 1e-5
         self.factor = 0.5
 
     def update(self, loss):
@@ -73,8 +62,6 @@ class AdaptiveLR(object):
 
     @lr.setter
     def lr(self, val):
-        # if VERBOSE:
-        #     print("resetting LR: %s -> %s" % (self._lr, val))
         set_learning_rate(val, self.opt)
         self._lr = val
 

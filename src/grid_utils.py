@@ -9,8 +9,6 @@ from aaindex import *
 
 VDW = {'C': 1.7, 'O': 1.52, 'N': 1.55, 'S': 1.8}
 
-BACKBONE_ATOMS = ['CA', 'C', 'N', 'O']
-
 CNOS = ["C", "N", "O", "S"]
 
 MAX_DISTANCE_CUTOFF = 15.0
@@ -105,12 +103,13 @@ def get_atoms_in_sphere_around_center(center, atoms, rad, atom_types=CNOS):
     return select_atoms_in_sphere([a for a in atoms if a.type in atom_types], center, rad)
 
 
-def get_atoms_in_sphere_around_res(res, atoms, rad, ignore_list=BACKBONE_ATOMS):
+def get_atoms_in_sphere_around_res(res, atoms, rad):
     neighbors = set()
     atoms = select_atoms_in_sphere(atoms, res.ca.coord, MAX_DISTANCE_CUTOFF)    # save time heuristic
-    for c in [a for a in res.atoms if a.name not in ignore_list]:
-        hits = get_atoms_in_sphere_around_center(c.coord, atoms, rad, atom_types=CNOS)
-        neighbors.update(hits)
+    for a in res.atoms:
+        hits = get_atoms_in_sphere_around_center(a.coord, atoms, rad, atom_types=CNOS)
+        hs = [h for h in hits if (h.res != res)]
+        neighbors.update(hs)
     return list(neighbors)
 
 
@@ -118,12 +117,13 @@ def get_atoms_in_shell_around_center(center, atoms, inner, outer, atom_types=CNO
     return select_atoms_in_shell(center, [a for a in atoms if a.type in atom_types], inner, outer)
 
 
-def get_atoms_in_shell_around_res(res, atoms, inner, outer, ignore_list=BACKBONE_ATOMS):
+def get_atoms_in_shell_around_res(res, atoms, inner, outer):
     neighbors = set()
     atoms = select_atoms_in_sphere(atoms, res.ca.coord, MAX_DISTANCE_CUTOFF)    # save time heuristic
-    for c in [a for a in res.atoms if a.name not in ignore_list]:
-        hits = get_atoms_in_shell_around_center(c.coord, atoms, inner, outer, atom_types=CNOS)
-        neighbors.update(hits)
+    for a in res.atoms:
+        hits = get_atoms_in_shell_around_center(a.coord, atoms, inner, outer, atom_types=CNOS)
+        hs = [h for h in hits if (h.res != res)]
+        neighbors.update(hs)
     return list(neighbors)
 
 

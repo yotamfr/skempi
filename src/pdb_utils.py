@@ -26,10 +26,22 @@ AA_dict = {
     "VAL": "V",
 }
 
+ATOMS = ['HD22', 'HD23', 'HD21', 'O3', 'HG11', 'CH2', 'HG13', 'HZ1', 'HZ3', 'HZ2', 'HA2', 'HA3',
+         'H', 'P', "C2'", 'HG12', 'OH', 'OG', 'HB1', 'HB3', 'HB2', 'HZ', 'OP1', 'OP2', 'OP3',
+         'CZ2', 'CZ3', "C5'", 'HH', 'HB', 'HE22', 'HE21', 'HA', 'HG', 'HE', 'NE2', 'C3', 'C',
+         'OXT', 'O', "C4'", 'CE3', 'CE2', 'CE1', 'HD3', 'HD2', 'HD1', 'H2', 'H3', 'H1', 'HH12',
+         'HH11', 'HG21', 'HG23', 'HG22', 'OP4', 'OE2', 'OE1', 'CD1', 'CD2', 'HE1', 'HE2', 'HE3',
+         'NE', 'HH22', 'NZ', 'HH21', 'ND1', 'C2', 'ND2', 'C6', 'C5', 'C4', 'OD1', 'OD2', 'CG',
+         'CE', 'N', 'CZ', 'CG1', 'N1', 'CG2', 'F1', 'F2', 'SG', 'SD', 'HH2', 'OG1', 'NE1', 'HG2',
+         'HG3', 'HG1', 'CB', 'CA', 'NH1', 'NH2', 'HD13', 'HD12', 'HD11', 'CD']
+
+
+ATOM_TYPES = list(set([a[0] for a in ATOMS]))
+ATOM_POSITIONS = list(set([a[1:] if len(a) > 1 else '' for a in ATOMS]))
+
 AAA_dict = {val: key for key, val in AA_dict.iteritems()}
 
 UNKNOWN = 'UNK'
-
 
 UNHANDLED = {'HETSYN', 'COMPND', 'SOURCE', 'KEYWDS', 'EXPDTA', 'AUTHOR', 'REVDAT', 'JRNL', 'SIGATM',
              'REMARK', 'DBREF', 'SEQADV', 'HET', 'HETNAM', 'FORMUL', 'HELIX', 'CAVEAT',
@@ -82,6 +94,10 @@ class Atom(object):
         return self.name[0]
 
     @property
+    def pos(self):
+        return self.name[1:] if len(self.name) > 1 else ''
+
+    @property
     def coord(self):
         return self._coord
 
@@ -96,6 +112,9 @@ class Atom(object):
     @property
     def z(self):
         return self._coord[2]
+
+    def __eq__(self, other):
+        return (self.name == other.name) and (self.res == other.res)
 
     def __str__(self):
         atom_num = self.num
@@ -170,6 +189,9 @@ class Residue(object):
     def chain_id(self):
         return self.chain.chain_id
 
+    def __eq__(self, other):
+        return (other.chain == self.chain) and (other.index == self.index)
+
     def __iter__(self):
         for atom in self.atoms:
             yield atom
@@ -179,9 +201,6 @@ class Residue(object):
 
     def __hash__(self):
         return hash((self.chain, self.num, self._name))
-
-    def __eq__(self, other):
-        return hash(self) == hash(other)
 
     def __str__(self):
         return "<Residue %s:%d>" % (self._name, self.num)
@@ -215,6 +234,9 @@ class Chain(object):
     @property
     def id(self):
         return "%s_%s" % (self.pdb, self.chain_id)
+
+    def __eq__(self, other):
+        return other.id == self.id
 
     def __hash__(self):
         return hash(self.id)
@@ -303,13 +325,11 @@ def _handle_line(line, atoms, residues, chains, pdb, chain_id='', residue_num=0)
         pass
 
     elif typ == 'ATOM' or typ == 'HETATM':
-
         # https://www.cgl.ucsf.edu/chimera/docs/UsersGuide/tutorials/pdbintro.html
         l_line = line[6:11], line[12:16], line[17:20], line[21], line[22:26], \
                  line[30:38], line[38:46], line[46:54], \
                  line[54:60], line[60:66], line[72:76], line[76:78]
         l_line = [s.strip() for s in l_line]
-
         atom_num, atom_name, res_name, chain_id, res_num, x, y, z, occup, temp, ident, sym = l_line
         atom_num, res_num = int(atom_num), int(res_num)
 
@@ -317,7 +337,6 @@ def _handle_line(line, atoms, residues, chains, pdb, chain_id='', residue_num=0)
             occup, temp = float(occup), float(temp)
         except ValueError:
             occup, temp = 1.00, 00.00
-
         try:
             to_one_letter(res_name)
         except KeyError:
@@ -377,4 +396,4 @@ if __name__ == "__main__":
     pdb = "4CPA"
     fd = open(osp.join("..", "data", 'PDBs',  "%s.pdb" % pdb), 'r')
     struct = parse_pdb(pdb, fd)
-    print(struct.pdb)
+    print(struct.pdb, len(ATOMS), ATOM_TYPES, len(ATOM_POSITIONS))
