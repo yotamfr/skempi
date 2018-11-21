@@ -165,6 +165,31 @@ def get_neural_features(struct, mutations):
 class PhysicalModel(Model):
     def __init__(self):
         super(PhysicalModel, self).__init__()
+
+    def forward(self, inputs, indices):
+        raise NotImplementedError
+
+    def get_loss(self, X, y):
+        mse = nn.MSELoss()
+        inputs1, indices = flatten(X)
+        lbl = torch.tensor(y, dtype=torch.float, device=device)
+        y_hat_p = self.forward(inputs1, indices).view(-1)
+        # y_hat_m = self.forward(inputs2, indices).view(-1)
+        # completeness0 = mse(0.5 * (y_hat_p - y_hat_m), lbl)
+        # consistency0 = mse(-y_hat_p, y_hat_m)
+        # loss = completeness0 + consistency0
+        # return loss, pearsonr_torch(y_hat_p, lbl)
+        return 1-pearsonr_torch(y_hat_p, lbl), pearsonr_torch(y_hat_p, lbl)
+
+    def predict(self, X):
+        self.eval()
+        inputs1, indices = flatten(X)
+        return self.forward(inputs1, indices).view(-1).cpu().data.numpy()
+
+
+class PhysicalModel1(PhysicalModel):
+    def __init__(self):
+        super(PhysicalModel, self).__init__()
         self.num_intact = 10
         self.emb_atm = nn.Embedding(8, 2)
         self.emb_pos = nn.Embedding(60, 3)
@@ -180,41 +205,11 @@ class PhysicalModel(Model):
         )
         self.weight.to(device)
         self.ddg = nn.Sequential(
-            nn.Linear(21, 3),
+            nn.Linear(20, 3),
             nn.Tanh(),
             nn.Linear(3, 1),
         )
         self.ddg.to(device)
-
-        # self.ddg = nn.Sequential(
-        #     nn.Linear(self.num_intact*(13+1) + 6, self.num_intact),
-        #     nn.Tanh(),
-        #     nn.Linear(self.num_intact, 1),
-        # )
-        # self.ddg.to(device)
-
-    # def forward(self, inputs, indices):
-    #     interactions, pos, mut, acc = inputs['IntAct'], inputs['Pos'], inputs['Mut'], inputs['Acc']
-    #     selection_len = self.num_intact
-    #     env = [[i.descriptor[1:] for i in ii] + ([[0, 0, 0, 0, 0, 0.0]] * (max(0, selection_len - len(ii)))) for ii in interactions]
-    #     rr, twt, trr, pwt, prr, dd = zip(*[zip(*e[:selection_len]) for e in env])
-    #     rr = self.emb_aa(torch.tensor(np.asarray(rr), dtype=torch.long, device=device))
-    #     trr = self.emb_atm(torch.tensor(np.asarray(trr), dtype=torch.long, device=device))
-    #     prr = self.emb_pos(torch.tensor(np.asarray(prr), dtype=torch.long, device=device))
-    #     twt = self.emb_atm(torch.tensor(np.asarray(twt), dtype=torch.long, device=device))
-    #     pwt = self.emb_pos(torch.tensor(np.asarray(pwt), dtype=torch.long, device=device))
-    #     dd = torch.tensor(np.asarray(dd), dtype=torch.float, device=device).unsqueeze(2)
-    #     interactions = torch.cat([twt, pwt, rr, prr, trr, dd], 2).view(-1, selection_len*(13+1))
-    #     ac = torch.tensor(np.asarray(acc), dtype=torch.float, device=device)
-    #     wt = self.emb_aa(torch.tensor(np.asarray(pos), dtype=torch.long, device=device))
-    #     mt = self.emb_aa(torch.tensor(np.asarray(mut), dtype=torch.long, device=device))
-    #     # inp = torch.cat([interactions, wt.squeeze(1), mt.squeeze(1), ac.unsqueeze(1)], 1)
-    #     inp = torch.cat([interactions, wt.squeeze(1), mt.squeeze(1)], 1)
-    #     ddg = self.ddg(inp)
-    #     out = torch.zeros((len(indices), 1), device=device)
-    #     for i, ixs in enumerate(indices):
-    #         for j in ixs: out[i, :] += ddg[j, :]
-    #     return out
 
     def forward(self, inputs, indices):
         interactions, pos, mut, acc = inputs['IntAct'], inputs['Pos'], inputs['Mut'], inputs['Acc']
@@ -233,53 +228,97 @@ class PhysicalModel(Model):
         interactions = torch.cat([mt, cc, pwt, twt, dd, rr, prr, trr], 2)
         weights = F.softmax(self.weight(interactions), 1)
         weighted_interactions = weights.transpose(1, 2).bmm(interactions).squeeze(1)
-        ac = torch.tensor(np.asarray(acc), dtype=torch.float, device=device)
-        inp = torch.cat([weighted_interactions, ac.unsqueeze(1)], 1)
-        ddg = self.ddg(inp)
+        # ac = torch.tensor(np.asarray(acc), dtype=torch.float, device=device)
+        # inp = torch.cat([weighted_interactions, ac.unsqueeze(1)], 1)
+        # ddg = self.ddg(inp)
+        ddg = self.ddg(weighted_interactions)
         out = torch.zeros((len(indices), 1), device=device)
         for i, ixs in enumerate(indices):
             for j in ixs: out[i, :] += ddg[j, :]
         return out
 
-#     def forward(self, inputs, indices):
-#         env, pos, mut, acc = inputs['Env'], inputs['Pos'], inputs['Mut'], inputs['Acc']
-#         max_len = np.max(map(len, env))
-#         env = [rr + ([[0, 0.0]] * (max_len - len(rr))) for rr in env]
-#         rr, dd = zip(*[zip(*e) for e in env])
-#         wt = [tuple(w * max_len) for w in pos]
-#         rr = self.emb(torch.tensor(np.asarray(rr), dtype=torch.long, device=device))
-#         wt = self.emb(torch.tensor(np.asarray(wt), dtype=torch.long, device=device))
-#         dd = torch.tensor(np.asarray(dd), dtype=torch.float, device=device).unsqueeze(2)
-#         interactions = torch.cat([wt, rr, dd], 2)
-#         weights = F.softmax(self.weight(interactions), 1)
-#         weighted_interactions = weights.transpose(1, 2).bmm(interactions).squeeze(1)
-#         ac = torch.tensor(np.asarray(acc), dtype=torch.float, device=device)
-#         inp = torch.cat([weighted_interactions, ac.unsqueeze(1)], 1)
-#         mt = self.emb(torch.tensor(np.asarray(mut), dtype=torch.long, device=device))
-#         ddg = torch.bmm(self.ddg(inp).unsqueeze(1), mt.transpose(1, 2)).squeeze(2)
-#         out = torch.zeros((len(indices), 1), device=device)
-#         for i, ixs in enumerate(indices):
-#             for j in ixs: out[i, :] += ddg[j, :]
-#         return out
 
-    def get_loss(self, X, y):
-        inputs1, indices = flatten(X)
-        # inputs2 = {'Env': inputs1['Env'], 'Mut': inputs1['Pos'],
-        #            'Pos': inputs1['Mut'], 'Acc': inputs1['Acc']}
-        lbl = torch.tensor(y, dtype=torch.float, device=device)
-        y_hat_p = self.forward(inputs1, indices).view(-1)
-        # y_hat_m = self.forward(inputs2, indices).view(-1)
-        mse = nn.MSELoss()
-        # completeness0 = mse(0.5 * (y_hat_p - y_hat_m), lbl)
-        # consistency0 = mse(-y_hat_p, y_hat_m)
-        # loss = completeness0 + consistency0
-        # return loss, pearsonr_torch(y_hat_p, lbl)
-        return 1-pearsonr_torch(y_hat_p, lbl), pearsonr_torch(y_hat_p, lbl)
+class PhysicalModel2(PhysicalModel):
+    def __init__(self):
+        super(PhysicalModel2, self).__init__()
+        self.num_intact = 10
+        self.emb_atm = nn.Embedding(8, 2)
+        self.emb_pos = nn.Embedding(60, 3)
+        self.emb_aa = nn.Embedding(21, 3)
+        self.emb_atm.to(device)
+        self.emb_pos.to(device)
+        self.emb_aa.to(device)
 
-    def predict(self, X):
-        self.eval()
-        inputs1, indices = flatten(X)
-        return self.forward(inputs1, indices).view(-1).cpu().data.numpy()
+        self.predictor = nn.Sequential(
+            nn.Linear(20, 5),
+            nn.ReLU(),
+            nn.Linear(5, 1),
+        )
+        self.predictor.to(device)
+
+    def forward(self, inputs, indices):
+        interactions, pos, mut, acc = inputs['IntAct'], inputs['Pos'], inputs['Mut'], inputs['Acc']
+        selection_len = self.num_intact
+        env = [[i.descriptor for i in ii] + ([[0, 0, 0, 0, 0, 0, 0.0]] * (max(0, selection_len - len(ii)))) for ii in interactions]
+        aa1, aa2, at1, at2, ap1, ap2, dd = zip(*[zip(*e[:selection_len]) for e in env])
+        mt = [tuple(m * selection_len) for m in mut]
+        mt = self.emb_aa(torch.tensor(np.asarray(mt), dtype=torch.long, device=device))
+        cc = self.emb_aa(torch.tensor(np.asarray(aa1), dtype=torch.long, device=device))
+        rr = self.emb_aa(torch.tensor(np.asarray(aa2), dtype=torch.long, device=device))
+        trr = self.emb_atm(torch.tensor(np.asarray(at2), dtype=torch.long, device=device))
+        prr = self.emb_pos(torch.tensor(np.asarray(ap2), dtype=torch.long, device=device))
+        twt = self.emb_atm(torch.tensor(np.asarray(at1), dtype=torch.long, device=device))
+        pwt = self.emb_pos(torch.tensor(np.asarray(ap1), dtype=torch.long, device=device))
+        dd = torch.tensor(np.asarray(dd), dtype=torch.float, device=device).unsqueeze(2)
+        interactions = torch.cat([mt, cc, pwt, twt, dd, rr, prr, trr], 2)
+        ddg = torch.sum(self.predcitor(interactions), 1)
+        # ac = torch.tensor(np.asarray(acc), dtype=torch.float, device=device)
+        out = torch.zeros((len(indices), 1), device=device)
+        for i, ixs in enumerate(indices):
+            for j in ixs: out[i, :] += ddg[j, :]
+        return out
+
+
+class PhysicalModel3(PhysicalModel):
+    def __init__(self):
+        super(PhysicalModel3, self).__init__()
+        self.num_intact = 10
+        self.emb_atm = nn.Embedding(8, 2)
+        self.emb_pos = nn.Embedding(60, 3)
+        self.emb_aa = nn.Embedding(21, 3)
+        self.emb_atm.to(device)
+        self.emb_pos.to(device)
+        self.emb_aa.to(device)
+
+        self.ddg = nn.Sequential(
+            nn.Linear(self.num_intact*(13+1) + 6, self.num_intact),
+            nn.Tanh(),
+            nn.Linear(self.num_intact, 1),
+        )
+        self.ddg.to(device)
+
+    def forward(self, inputs, indices):
+        interactions, pos, mut, acc = inputs['IntAct'], inputs['Pos'], inputs['Mut'], inputs['Acc']
+        selection_len = self.num_intact
+        env = [[i.descriptor[1:] for i in ii] + ([[0, 0, 0, 0, 0, 0.0]] * (max(0, selection_len - len(ii)))) for ii in interactions]
+        rr, twt, trr, pwt, prr, dd = zip(*[zip(*e[:selection_len]) for e in env])
+        rr = self.emb_aa(torch.tensor(np.asarray(rr), dtype=torch.long, device=device))
+        trr = self.emb_atm(torch.tensor(np.asarray(trr), dtype=torch.long, device=device))
+        prr = self.emb_pos(torch.tensor(np.asarray(prr), dtype=torch.long, device=device))
+        twt = self.emb_atm(torch.tensor(np.asarray(twt), dtype=torch.long, device=device))
+        pwt = self.emb_pos(torch.tensor(np.asarray(pwt), dtype=torch.long, device=device))
+        dd = torch.tensor(np.asarray(dd), dtype=torch.float, device=device).unsqueeze(2)
+        interactions = torch.cat([twt, pwt, rr, prr, trr, dd], 2).view(-1, selection_len*(13+1))
+        ac = torch.tensor(np.asarray(acc), dtype=torch.float, device=device)
+        wt = self.emb_aa(torch.tensor(np.asarray(pos), dtype=torch.long, device=device))
+        mt = self.emb_aa(torch.tensor(np.asarray(mut), dtype=torch.long, device=device))
+        # inp = torch.cat([interactions, wt.squeeze(1), mt.squeeze(1), ac.unsqueeze(1)], 1)
+        inp = torch.cat([interactions, wt.squeeze(1), mt.squeeze(1)], 1)
+        ddg = self.ddg(inp)
+        out = torch.zeros((len(indices), 1), device=device)
+        for i, ixs in enumerate(indices):
+            for j in ixs: out[i, :] += ddg[j, :]
+        return out
 
 
 if __name__ == "__main__":
@@ -288,6 +327,6 @@ if __name__ == "__main__":
     records = load_skempi(df[df.version == 2].reset_index(drop=True)[:lim], SKMEPI2_PDBs, False)
     y = np.asarray([r.ddg for r in records])
     X = np.asarray([get_neural_features(r.struct, r.mutations) for r in records])
-    m1 = PhysicalModel()
+    m1 = PhysicalModel2()
     loss, pcc = m1.get_loss(X, y)
     print(loss, pcc)
