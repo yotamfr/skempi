@@ -3,7 +3,7 @@ import json
 
 PDB_PATH = osp.join("..", "data", "pdbs")
 SKMEPI2_PDBs = osp.join('..', 'data', 'PDBs')
-
+PROTHERM_PDBs = osp.join("..", "data", "mutation_data_sets", "pdbs")
 
 NUM_GROUPS = 5
 

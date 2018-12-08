@@ -1,5 +1,6 @@
 import math
 import numpy as np
+from pyobb.obb import OBB
 from functools import reduce
 from scipy.linalg import expm, norm
 from scipy.ndimage.filters import gaussian_filter
@@ -13,57 +14,44 @@ CNOS = ["C", "N", "O", "S"]
 
 MAX_DISTANCE_CUTOFF = 15.0
 
-
-def ones(atoms, atom_types):
-    return np.asarray([1 for a in atoms if a.type in atom_types])
+default = None
 
 
-def get_4channel_voxels_around_res(atoms, res, R, nv=20):
-    c1 = get_3d_voxels_around_res(atoms, res, ones, rot=R, num_voxels=nv, atom_types=['C'], vdw=1.70)
-    c2 = get_3d_voxels_around_res(atoms, res, ones, rot=R, num_voxels=nv, atom_types=['N'], vdw=1.55)
-    c3 = get_3d_voxels_around_res(atoms, res, ones, rot=R, num_voxels=nv, atom_types=['O'], vdw=1.52)
-    c4 = get_3d_voxels_around_res(atoms, res, ones, rot=R, num_voxels=nv, atom_types=['S'], vdw=1.80)
-    return np.stack([c1, c2, c3, c4], axis=0)
+def get_center_and_rotation(residues):
+    if len(residues) == 1:
+        res = residues[0]
+        c = np.asarray(res.c.coord) - res.center
+        n = np.asarray(res.n.coord) - res.center
+        ca = np.asarray(res.ca.coord) - res.center
+        return res.center, ref_mat(ca, c, n)
+    else:
+        points = [res.center for res in residues]
+        obb = OBB.build_from_points(points)
+        return obb.centroid, obb.rotation
 
 
-def get_8channel_voxels_around_res(atoms, ca, cb, res, R, nv=20):
-    atoms_r = [a for a in atoms if a.res == res]
-    atoms_a = [a for a in atoms if a.chain_id in ca]
-    atoms_b = [a for a in atoms if a.chain_id in cb]
-    mkAB = get_3d_voxels_around_res(atoms, res, ones, rot=R, num_voxels=nv, atom_types=CNOS)
-    mkA = get_3d_voxels_around_res(atoms_a, res, ones, rot=R, num_voxels=nv, atom_types=CNOS)
-    mkB = get_3d_voxels_around_res(atoms_b, res, ones, rot=R, num_voxels=nv, atom_types=CNOS)
-    mkR = get_3d_voxels_around_res(atoms_r, res, ones, rot=R, num_voxels=nv, atom_types=CNOS)
-    ch1 = get_3d_voxels_around_res(atoms, res, ones, rot=R, num_voxels=nv, atom_types=['C'])
-    ch2 = get_3d_voxels_around_res(atoms, res, ones, rot=R, num_voxels=nv, atom_types=['N'])
-    ch3 = get_3d_voxels_around_res(atoms, res, ones, rot=R, num_voxels=nv, atom_types=['O'])
-    ch4 = get_3d_voxels_around_res(atoms, res, ones, rot=R, num_voxels=nv, atom_types=['S'])
-    return np.stack([mkR, mkAB, mkA, mkB, ch1, ch2, ch3, ch4], axis=0)
+def get_voxel_channels_of_atoms(atoms, center, rot, rad=10.0, reso=1.0):
+    atoms = select_atoms_in_sphere(atoms, center, rad*1.5)
+    atm_channels = [get_voxels_around_center(
+        atoms, center, rot, lambda x: x.type == t, lambda x: default, rad=rad, reso=reso) for t in 'CNOS']
+    # res_channels = [get_voxels_around_center(
+    #     atoms, center, rot, lambda x: x.res.name == aa, lambda x: default, rad=rad, reso=reso) for aa in amino_acids]
+    c5 = get_voxels_around_center(atoms, center, rot, lambda x: True, lambda x: x.res.consv, rad=rad, reso=reso)
+    c6 = get_voxels_around_center(atoms, center, rot, lambda x: True, lambda x: x.res.acc1, rad=rad, reso=reso)
+    # c7 = get_voxels_around_center(atoms, center, rot, lambda x: True, lambda x: x.res.acc2, rad=rad, reso=reso)
+    # c8 = get_voxels_around_center(atoms, center, rot, lambda x: True, lambda x: x.temp, rad=rad, reso=reso)
+    return np.stack(atm_channels + [c5, c6], axis=0)
 
 
-# def hydrophobicity(atoms, atom_types):
-#     return np.asarray([ARGP820101[a.res.name] for a in atoms if a.type in atom_types])
-#
-#
-# def molweight(atoms, atom_types):
-#     return np.asarray([FASG760101[a.res.name] for a in atoms if a.type in atom_types])
-#
-#
-# def bfactor(atoms, atom_types):
-#     return np.asarray([a.temp for a in atoms if a.type in atom_types])
-#
-#
-# def get_feature_maps(atoms, res, R, nv=20):
-#     ch = get_3d_voxels_around_res(atoms, res, hydrophobicity, rot=R, num_voxels=nv, atom_types=['C', 'N', 'O', 'S'])
-#     cm = get_3d_voxels_around_res(atoms, res, molweight, rot=R, num_voxels=nv, atom_types=['C', 'N', 'O', 'S'])
-#     cb = get_3d_voxels_around_res(atoms, res, bfactor, rot=R, num_voxels=nv, atom_types=['C', 'N', 'O', 'S'])
-#     return np.stack([ch, cm, cb], axis=0)
-#
-#
-# def get_voxels(atoms, res, R, nv=20):
-#     ca = get_4channel_voxels(atoms, res, R, nv)
-#     cf = get_feature_maps(atoms, res, R, nv)
-#     return ca, cf
+def get_voxel_channels_of_residues(atoms, residues, center, rot, rad=10.0, reso=1.0):
+    atoms = select_atoms_in_sphere(atoms, center, rad*1.5)
+    # atm_channels = [get_voxels_around_center(
+    #     atoms, center, rot, lambda x: (x.type == t) and (x.res in residues),
+    #     lambda x: 1, rad=rad, reso=reso) for t in 'CNOS']
+    res_channels = [get_voxels_around_center(
+        atoms, center, rot, lambda x: (x.res.name == aa) and (x.res in residues),
+        lambda x: 1, rad=rad, reso=reso) for aa in amino_acids]
+    return np.stack(res_channels, axis=0)
 
 
 def select_atoms_in_box(atoms, center, r):
@@ -105,7 +93,7 @@ def get_atoms_in_sphere_around_center(center, atoms, rad, atom_types=CNOS):
 
 def get_atoms_in_sphere_around_res(res, atoms, rad):
     neighbors = set()
-    atoms = select_atoms_in_sphere(atoms, res.ca.coord, MAX_DISTANCE_CUTOFF)    # save time heuristic
+    atoms = select_atoms_in_sphere(atoms, res.center, MAX_DISTANCE_CUTOFF)    # save time heuristic
     for a in res.atoms:
         hits = get_atoms_in_sphere_around_center(a.coord, atoms, rad, atom_types=CNOS)
         hs = [h for h in hits if (h.res != res)]
@@ -174,21 +162,29 @@ def get_cp_descriptors_around_res(atoms, res):
     return np.concatenate([cp46, cp68], axis=0)
 
 
-def get_3d_voxels_around_res(atoms, res, values_from_atoms, rot=None, num_voxels=20, atom_types=['C'], vdw=0.0):
+def get_voxels_around_center(atoms, center, R, selector_fn, value_fn, rad=10.0, reso=1.0, vdw=0.0):
     smooth = vdw / 3.0
-    r = num_voxels // 2
-    X = np.asarray([a.coord for a in atoms if a.type in atom_types])
-    y = values_from_atoms(atoms, atom_types)
-    if len(X) == 0:
-        return voxelize([], [], num_voxels, smooth=smooth)
-    X -= res.ca.coord
-    if rot is not None:
-        X = rot(X)
-    indx_x = np.intersect1d(np.where(X[:, 0] > -r), np.where(X[:, 0] < r))
-    indx_y = np.intersect1d(np.where(X[:, 1] > -r), np.where(X[:, 1] < r))
-    indx_z = np.intersect1d(np.where(X[:, 2] > -r), np.where(X[:, 2] < r))
+    try: X, y = zip(*[[a.coord, value_fn(a)] for a in atoms if selector_fn(a)])
+    except ValueError: return voxelize([], [], rad, reso, smooth=smooth)
+    X, y = np.asarray(X), np.asarray(y)
+    X -= center
+    X = np.dot(R, X.T).T
+    indx_x = np.intersect1d(np.where(X[:, 0] > -rad), np.where(X[:, 0] < rad))
+    indx_y = np.intersect1d(np.where(X[:, 1] > -rad), np.where(X[:, 1] < rad))
+    indx_z = np.intersect1d(np.where(X[:, 2] > -rad), np.where(X[:, 2] < rad))
     indx = reduce(np.intersect1d, [indx_x, indx_y, indx_z])
-    return voxelize(X[indx, :], y[indx], num_voxels, smooth=smooth)
+    return voxelize(X[indx, :], y[indx], rad, reso, smooth=smooth)
+
+
+def ref_mat(ca, c, n):
+    v1, v2 = ca - c, ca - n
+    v3 = v2-(np.dot(v1, v2)/np.dot(v1, v1))*v1  # graham-schmidt
+    v4 = np.cross(v1, v3)   # right hand rule
+    v1 /= np.linalg.norm(v1)
+    v3 /= np.linalg.norm(v3)
+    v4 /= np.linalg.norm(v4)
+    A = np.matrix([v1, v3, v4])  # A is isometric
+    return A
 
 
 def rot(axis, theta):
@@ -236,16 +232,98 @@ def get_xyz_rotations(circle_frac=0.25):
     return rotations_x + rotations_y + rotations_z
 
 
-def voxelize(X, y, num_voxels, smooth=0.0):
-    n = num_voxels
-    voxels = np.zeros((n + 1, n + 1, n + 1))
-    for coord, val in zip(X, y):
-        i, j, k = np.floor(coord + n / 2)
-        voxels[int(i), int(j), int(k)] = val
+def voxelize(X, y, radius, resolution=1.0, smooth=0.0):
+    n = int(2.0 * radius / resolution)
+    voxels = np.zeros((n, n, n))
+    if len(X) == 0:
+        return voxels
+    shifted_X = X/resolution + n/2.0
+    indices = shifted_X.astype(int)
+    voxel_centers = indices + resolution/2.0
+    distances = np.sqrt(np.sum(np.power(shifted_X - voxel_centers, 2), axis=1))
+    distances = resolution - distances
+    for i, ((i, j, k), v) in enumerate(zip(indices.tolist(), y)):
+        try:
+            voxels[i, j, k] = v if v else distances[i]
+        except IndexError:
+            continue
     if smooth != 0.0:
         voxels[:, :, :] = gaussian_filter(voxels, sigma=smooth, order=0, output=None, mode='reflect', cval=0.0, truncate=4.0)
     return voxels
 
 
+def plot_3d_atom_voxels(voxels):
+    from mpl_toolkits.mplot3d import axes3d, Axes3D
+    import matplotlib.pyplot as plt
+    import numpy as np
+    C = voxels[0].astype(bool)
+    N = voxels[1].astype(bool)
+    O = voxels[2].astype(bool)
+    S = voxels[3].astype(bool)
+    voxels = C | N | O | S
+    # set the colors of each object
+    colors = np.empty(voxels.shape, dtype=object)
+    colors[C] = 'green'
+    colors[N] = 'blue'
+    colors[O] = 'red'
+    colors[S] = 'purple'
+    # and plot everything
+    fig = plt.figure()
+    ax = fig.gca(projection='3d')
+    ax.voxels(voxels, facecolors=colors, edgecolor='k')
+    return plt
+
+
+def plot_3d_residue_voxels(voxels):
+    from mpl_toolkits.mplot3d import axes3d, Axes3D
+    import matplotlib.pyplot as plt
+    import numpy as np
+    AA = [voxels[i].astype(bool) for i in range(20)]
+    voxels = AA[0]
+    for i in range(1, 20): voxels |= AA[i]
+    # set the colors of each object
+    colors = np.empty(voxels.shape, dtype=object)
+
+    colors[AA[amino_acids.index("G")]] = 'pink'
+    colors[AA[amino_acids.index("P")]] = 'orange'
+
+    colors[AA[amino_acids.index("M")]] = 'red'
+    colors[AA[amino_acids.index("A")]] = 'red'
+    colors[AA[amino_acids.index("I")]] = 'red'
+    colors[AA[amino_acids.index("L")]] = 'red'
+    colors[AA[amino_acids.index("V")]] = 'red'
+
+    colors[AA[amino_acids.index("F")]] = 'yellow'
+    colors[AA[amino_acids.index("W")]] = 'yellow'
+    colors[AA[amino_acids.index("Y")]] = 'yellow'
+
+    colors[AA[amino_acids.index("N")]] = 'purple'
+    colors[AA[amino_acids.index("C")]] = 'purple'
+    colors[AA[amino_acids.index("Q")]] = 'purple'
+    colors[AA[amino_acids.index("S")]] = 'purple'
+    colors[AA[amino_acids.index("T")]] = 'purple'
+
+    colors[AA[amino_acids.index("R")]] = 'blue'
+    colors[AA[amino_acids.index("H")]] = 'blue'
+    colors[AA[amino_acids.index("K")]] = 'blue'
+
+    colors[AA[amino_acids.index("D")]] = 'green'
+    colors[AA[amino_acids.index("E")]] = 'green'
+
+    # and plot everything
+    fig = plt.figure()
+    ax = fig.gca(projection='3d')
+    ax.voxels(voxels, facecolors=colors, edgecolor='k')
+    return plt
+
+
 if __name__ == "__main__":
-    pass
+    from skempi_lib import *
+    from skempi_consts import *
+    df = skempi_df_v2
+    df, lim = skempi_df_v2, 1000
+    for r in load_skempi(df[df.version == 1][:lim].reset_index(drop=True), SKMEPI2_PDBs, False):
+        if len(r.mutations) > 1:
+            points = [r.struct.get_residue(m).center for m in r.mutations]
+            obb = OBB.build_from_points(points)
+            cnt, rot = obb.centroid, obb.rotation

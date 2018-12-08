@@ -2,16 +2,9 @@ import os
 import json
 import itertools
 import numpy as np
+from pdb_utils import to_fasta
 
 CDHIT_HOME = "/media/disk1/yotam/skempi/cdhit"
-
-
-def to_fasta(structs, out_file):
-    lines = []
-    for st in structs:
-        lines.extend([">%s\n%s\n" % (c.id, c.seq) for c in st.chains.values()])
-    with open(out_file, "w+") as f:
-        f.writelines(lines)
 
 
 def get_cdhit_clusters(fasta_filename,
