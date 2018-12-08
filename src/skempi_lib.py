@@ -14,9 +14,6 @@ from grid_utils import *
 from skempi_consts import *
 
 
-BACKBONE_ATOMS = ['CA', 'C', 'N', 'O']
-
-
 class MSA(object):
     def __init__(self, pdb, chain):
         uid = "%s_%s.aln" % (pdb, chain)
@@ -78,7 +75,6 @@ class Profile(object):
 class Stride(object):
     def __init__(self, stride_df):
         self._dict = {}
-        self._total = 0.0
         for i, row in stride_df.iterrows():
             d_row = row.to_dict()
             try:
@@ -86,12 +82,12 @@ class Stride(object):
                 res_i = int(d_row["Res"]) - 1
             except ValueError as e:
                 continue
-            self._total += (d_row["ASA_Chain"] - d_row["ASA"])
             self._dict[(chain_id, res_i)] = d_row
 
     def __getitem__(self, t):
         chain_id, res_i = t
-        return self._dict[(chain_id, res_i)]
+        try: return self._dict[(chain_id, res_i)]
+        except KeyError: return {'ASA': -1., 'ASA_Chain': -1.}
 
 
 def get_stride(pdb_struct, ca, cb):
@@ -130,6 +126,15 @@ class SkempiStruct(PDB):
         self.chains_a = chains_a
         self.chains_b = chains_b
         self.stride = get_stride(self, chains_a, chains_b)
+        self.init_residues()
+
+    def init_residues(self):
+        for c in self._chains:
+            for i, r in enumerate(c.residues):
+                assert r.index == i
+                r.consv = self.get_consrv(c.chain_id, i)
+                r.acc1 = self.get_acc1(c.chain_id, i)
+                r.acc2 = self.get_acc2(c.chain_id, i)
 
     def init_profiles(self):
         if self.profiles is not None:
@@ -147,6 +152,26 @@ class SkempiStruct(PDB):
     def get_alignment(self, chain_id):
         return self.alignments[chain_id]
 
+    def get_residue(self, mut):
+        return self[mut.chain_id][mut.i]
+
+    def get_consrv(self, chain_id, posi, eps=0.0001):
+        w = self[chain_id][posi].name
+        if w == 'X': return 0.0     # zero information
+        return -np.log(max(self.get_profile(chain_id)[(posi, w)], eps))
+
+    def get_acc1(self, chain_id, posi):
+        d = (lambda dic: dic["ASA"])(self.stride[(chain_id, posi)])
+        w = self[chain_id][posi].name
+        if w == 'X': return 1 - (float(d) / np.mean(MaxASA_emp.values()))
+        return 1 - (float(d) / MaxASA_emp[w])
+
+    def get_acc2(self, chain_id, posi):
+        d = (lambda dic: dic["ASA_Chain"] - dic["ASA"])(self.stride[(chain_id, posi)])
+        w = self[chain_id][posi].name
+        if w == 'X': return float(d) / np.mean(MaxASA_emp.values())
+        return float(d) / MaxASA_emp[w]
+
     @property
     def protein(self):
         return "%s_%s_%s" % (self.pdb[:4], self.chains_a, self.chains_b)
@@ -160,12 +185,22 @@ class SkempiStruct(PDB):
         return self.pdb
 
 
+class ProthermStruct(SkempiStruct):
+    def __init__(self, pdb_struct, profiles=None, alignments=None):
+        chains_a = chains_b = ''.join([c for c in pdb_struct.chains])
+        super(ProthermStruct, self).__init__(pdb_struct, chains_a, chains_b, profiles, alignments)
+
+    def get_acc2(self, chain_id, posi):
+        return 0.0
+
+
 class SkempiRecord(object):
 
     def __init__(self, skempi_struct, mutations, ddg_arr=[], load_mutant=True):
         self.ddg_arr = ddg_arr
         self.struct = skempi_struct
         self.mutant = None
+        assert all([skempi_struct[m.chain_id][m.i].name == m.w for m in mutations])
         self.mutations = mutations
         if load_mutant:
             self.init_mutant()
@@ -209,6 +244,20 @@ class SkempiRecord(object):
         return hash(str(self))
 
 
+class ProthermRecord(SkempiRecord):
+
+    def __init__(self, skempi_struct, mutations, ddg_arr=[], load_mutant=True):
+        super(ProthermRecord, self).__init__(skempi_struct, mutations, ddg_arr, load_mutant)
+
+    def init_mutant(self):
+        wt = self.struct
+        mutantname, ws = apply_modeller(wt, self.mutations)
+        pth = osp.join(ws, "%s.pdb" % mutantname)
+        mutant_sturct = parse_pdb(mutantname, open(pth, 'r'))
+        profiles, alignments = self.struct.profiles, self.struct.alignments
+        self.mutant = ProthermStruct(mutant_sturct, profiles, alignments)
+
+
 class Mutation(object):
 
     def __init__(self, mutation_str):
@@ -238,18 +287,18 @@ class Mutation(object):
         return hash(self._str)
 
 
-class DDGMapper(object):
-
-    def __init__(self, records):
-        from sklearn.linear_model import LinearRegression
-        self._dic = {r: r.ddg for r in records}
-        self._model = LinearRegression()
-        X = np.asarray([r.features for r in records])
-        y = np.asarray([r.ddg for r in records])
-        self._model.fit(X, y)
-
-    def __call__(self, r):
-            return np.asarray([self._dic[r]]) if r in self._dic else self._model.predict([r.features])
+# class DDGMapper(object):
+#
+#     def __init__(self, records):
+#         from sklearn.linear_model import LinearRegression
+#         self._dic = {r: r.ddg for r in records}
+#         self._model = LinearRegression()
+#         X = np.asarray([r.features for r in records])
+#         y = np.asarray([r.ddg for r in records])
+#         self._model.fit(X, y)
+#
+#     def __call__(self, r):
+#             return np.asarray([self._dic[r]]) if r in self._dic else self._model.predict([r.features])
 
 
 def parse_mutations(mutations_str, reverse=False, sep=','):
@@ -383,11 +432,15 @@ def agg_multiple_scores_to_one(scores):
     return np.max(scores) + np.min(scores) - np.mean(scores)
 
 
-def compute_score(score_func, struct, mutations, agg=agg_multiple_scores_to_one, with_ac=True):
+def get_scores(score_func, struct, mutations, with_ac=True):
     if with_ac:
-        return agg([ac_ratio(struct, m.chain_id, m.i) * score_func(struct, m) for m in mutations])
+        return [ac_ratio(struct, m.chain_id, m.i) * score_func(struct, m) for m in mutations]
     else:
-        return agg([score_func(struct, m) for m in mutations])
+        return [score_func(struct, m) for m in mutations]
+
+
+def compute_score(score_func, struct, mutations, agg=agg_multiple_scores_to_one, with_ac=True):
+    return agg(get_scores(score_func, struct, mutations, with_ac=with_ac))
 
 
 def get_features(struct, mutations):
@@ -401,16 +454,50 @@ def get_features(struct, mutations):
     # feats["CP68"] = compute_score(score_cp68, struct, mutations, agg=np.sum)
     feats["BV"] = compute_score(score_bv, struct, mutations, agg=np.sum)
     feats["SK"] = compute_score(score_sk, struct, mutations, agg=np.sum)
-#     feats.update(get_counts(mutations))
+    # feats.update(get_counts(mutations))
     return feats
+
+
+def get_neural_features(struct, mutations):
+    feats = dict()
+    feats["Feats"] = [Descriptor(struct, mut).scores for mut in mutations]
+    feats["IntAct"] = [get_interactions(struct, mut) for mut in mutations]
+    feats["Pos"] = [[amino_acids.index(mut.w) + 1] for mut in mutations]
+    feats["Mut"] = [[amino_acids.index(mut.m) + 1] for mut in mutations]
+    feats["Acc"] = [ac_ratio(struct, mut.chain_id, mut.i) for mut in mutations]
+    feats["Prof"] = [[struct.get_profile(mut.chain_id)[(mut.i, aa)] for aa in amino_acids] for mut in mutations]
+    # feats["Cons"]
+    return feats
+
+
+class Descriptor(object):
+
+    def __init__(self, struct, mut):
+        self.struct = struct
+        self.mut = mut
+
+    @property
+    def scores(self):
+        hp = score_hp(self.struct, self.mut)
+        bi = score_bi(self.struct, self.mut)
+        sk = score_sk(self.struct, self.mut)
+        bv = score_bv(self.struct, self.mut)
+        evo = score_evo(self.struct, self.mut)
+        return np.asarray([hp, bi, sk, bv, evo])
 
 
 class Interaction(object):
 
-    def __init__(self, atom_a, atom_b, dist=None):
+    def __init__(self, st, mut, atom_a, atom_b, dist=None):
+        self.mut = mut
+        self.struct = st
         self.atom_a = atom_a
         self.atom_b = atom_b
         self._dist = dist
+
+    @staticmethod
+    def pad():
+        return [0, 0, 0, 0, 0, 0, 0, 0.0, 0.0, 0.0, 0.0]
 
     @property
     def dist(self):
@@ -430,7 +517,10 @@ class Interaction(object):
         at1, at2 = ATOM_TYPES.index(a.type) + 1, ATOM_TYPES.index(b.type) + 1
         ap1, ap2 = ATOM_POSITIONS.index(a.pos) + 1, ATOM_POSITIONS.index(b.pos) + 1
         aa1, aa2 = amino_acids.index(a.res.name) + 1, amino_acids.index(b.res.name) + 1
-        return [aa1, aa2, at1, at2, ap1, ap2, self.dist]
+        pr_mut = self.struct.get_profile(self.mut.chain_id)[(self.mut.i, self.mut.m)]
+        pr1 = self.struct.get_profile(a.chain_id)[(a.res.index, b.res.name)]
+        pr2 = self.struct.get_profile(b.chain_id)[(b.res.index, a.res.name)]
+        return [amino_acids.index(self.mut.m) + 1, aa1, aa2, at1, at2, ap1, ap2, self.dist, pr1, pr2, pr_mut]
 
     def __str__(self):
         a, b = self.atom_a, self.atom_b
@@ -445,7 +535,7 @@ def get_interactions(struct, mut, rad=4.0, ignore_list=BACKBONE_ATOMS):
     residues = list(set([a.res for a in get_atoms_in_sphere_around_res(center_res, struct.atoms, rad)]))
     envs = [dist(X, [a.coord for a in rr.atoms]) for rr in residues]
     indices = [np.unravel_index(np.argmin(e, axis=None), e.shape) for e in envs]
-    interactions = [Interaction(center_res[i], residues[k][j], envs[k][i, j]) for k, (i, j) in enumerate(indices)]
+    interactions = [Interaction(struct, mut, center_res[i], residues[k][j], envs[k][i, j]) for k, (i, j) in enumerate(indices)]
     filtered_interactions = [ii for ii in interactions if ii.atom_a.name not in ignore_list]
     # if len([str(i) for i in interactions if 1.8 <= i.dist <= 2.2]):
     # print(str(interactions[0].atom_a.res.chain), str(interactions[0].atom_a))
@@ -502,35 +592,60 @@ class Dataset(object):
         return len(self.records)
 
 
-def load_skempi(dataframe, path_to_pdbs, load_mut=True, min_seq_length=0):
+def load_protherm(dataframe, path_to_pdbs, load_mut=True, min_seq_length=0):
     structs = {}
-    # mu, sigma = dataframe.DDG.mean(), dataframe.DDG.std()
+    for i in tqdm(range(len(dataframe)), "loading structures"):
+        row = dataframe.loc[i]
+        if row.PDB in structs: continue
+        pth = osp.join(path_to_pdbs, "%s.pdb" % row.PDB.lower())
+        st = parse_pdb(row.PDB, open(pth, 'r'))
+        if np.any([len(c) <= min_seq_length for c in st._chains]): continue
+        structs[row.PDB] = ProthermStruct(st)
+    records = {}
+    for i in tqdm(range(len(dataframe)), "loading records"):
+        row = dataframe.loc[i]
+        if row.PDB not in structs: continue
+        mutations = parse_mutations(row.Mut)
+        r = ProthermRecord(structs[row.PDB], mutations, [row.DDG], load_mutant=load_mut)
+        if hash(r) in records: records[hash(r)].ddg_arr.append(row.DDG)
+        else: records[hash(r)] = r
+    return records.values()
+
+
+def load_varibench(): return load_protherm(varib_df, PROTHERM_PDBs, True, 0)
+
+
+def load_s2648(): return load_protherm(s2648_df, PROTHERM_PDBs, True, 0)
+
+
+def load_skempi(dataframe, path_to_pdbs, load_mut=True , min_seq_length=0):
+    structs = {}
     for i in tqdm(range(len(dataframe)), "loading structures"):
         row = dataframe.loc[i]
         modelname, ca, cb = t = tuple(row.Protein.split('_'))
         if t in structs: continue
         pth = osp.join(path_to_pdbs, "%s.pdb" % t[0])
         st = parse_pdb(modelname, open(pth, 'r'))
+        if np.any([len(c) <= min_seq_length for c in st._chains]): continue
         structs[t] = SkempiStruct(st, ca, cb)
     records = {}
     for i in tqdm(range(len(dataframe)), "loading records"):
         row = dataframe.loc[i]
         muts = row["Mutation(s)_cleaned"]
         ddg = row.DDG
-        # if not (mu - 3 * sigma <= ddg <= mu + 3 * sigma): continue
         t = tuple(row.Protein.split('_'))
+        if t not in structs: continue
         st = structs[t]
-        if np.any([len(c) <= min_seq_length for c in st._chains]): continue
         r = SkempiRecord(st, parse_mutations(muts), [ddg], load_mutant=load_mut)
         if hash(r) in records: records[hash(r)].ddg_arr.append(ddg)
         else: records[hash(r)] = r
     return records.values()
 
 
-def load_skempi_v1(): return load_skempi(skempi_df, PDB_PATH, True, 0)
+def load_skempi_v1(df): return load_skempi(df[df.version == 1].reset_index(drop=True), SKMEPI2_PDBs, False)
 
 
-def load_skempi_v2(): return load_skempi(skempi_df_v2, SKMEPI2_PDBs, True, 0)
+def load_skempi_v2(df): return load_skempi(df[df.version == 2].reset_index(drop=True), SKMEPI2_PDBs, False)
 
 
 def prepare_zemu():
@@ -583,6 +698,23 @@ def prepare_skempi_v2():
     return df.reset_index(drop=True)
 
 
+def prepare_varibench(basedir="../data/mutation_data_sets/crossval_varibench"):
+    return prepare_crossval_dataset(basedir)
+
+
+def prepare_s2648(basedir="../data/mutation_data_sets/crossval_s2648"):
+    return prepare_crossval_dataset(basedir)
+
+
+def prepare_crossval_dataset(basedir, lim=None):
+    data = []
+    for fname in os.listdir(basedir)[:lim]:
+        ll = [l.strip().split() for l in open(osp.join(basedir, fname), 'r').readlines()]
+        ll = [(r[0].upper()[:4], r[1][:1]+r[0][4]+r[1][1:], -float(r[2])) for r in ll]
+        data.extend(ll)
+    return pd.DataFrame(data, columns=["PDB", "Mut", "DDG"]).drop_duplicates().reset_index(drop=True)
+
+
 try:
     skempi_df = pd.read_excel(osp.join('..', 'data', 'SKEMPI_1.1.xlsx'))
     skempi_df["num_chains"] = skempi_df.Protein.str.slice(start=6).apply(len).values
@@ -590,6 +722,8 @@ try:
     skempi_df_v2 = prepare_skempi_v2()
     skempi_df_v2["num_chains"] = skempi_df_v2.Protein.str.slice(start=6).apply(len).values
     skempi_df_v2["num_muts"] = skempi_df_v2['Mutation(s)_cleaned'].str.split(',').apply(len).values
+    varib_df = prepare_varibench()
+    s2648_df = prepare_s2648()
 except IOError as e:
     print("warning: %s" % e)
     skempi_df = None
@@ -598,12 +732,11 @@ except IOError as e:
 
 if __name__ == "__main__":
     from tqdm import tqdm
-    structs = {}
-    i = 100
+    i, structs = 29, {}
     row = skempi_df.loc[i]
     t = tuple(row.Protein.split('_'))
     pth = osp.join("..", "data", "pdbs", "%s.pdb" % t[0])
-    structs[t] = parse_pdb(t[0], open(pth, 'r'))
+    structs[t] = SkempiStruct(parse_pdb(t[0], open(pth, 'r')), t[1], t[2])
     records = []
     row = skempi_df.loc[i]
     mutations = parse_mutations(row["Mutation(s)_cleaned"])
