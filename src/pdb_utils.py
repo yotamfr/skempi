@@ -25,6 +25,7 @@ AA_dict = {
     "TYR": "Y",
     "VAL": "V",
 }
+AAA = {v: k for k, v in AA_dict.iteritems()}
 
 ATOMS = ['HD22', 'HD23', 'HD21', 'O3', 'HG11', 'CH2', 'HG13', 'HZ1', 'HZ3', 'HZ2', 'HA2', 'HA3',
          'H', 'P', "C2'", 'HG12', 'OH', 'OG', 'HB1', 'HB3', 'HB2', 'HZ', 'OP1', 'OP2', 'OP3',
@@ -46,9 +47,11 @@ UNKNOWN = 'UNK'
 UNHANDLED = {'HETSYN', 'COMPND', 'SOURCE', 'KEYWDS', 'EXPDTA', 'AUTHOR', 'REVDAT', 'JRNL', 'SIGATM',
              'REMARK', 'DBREF', 'SEQADV', 'HET', 'HETNAM', 'FORMUL', 'HELIX', 'CAVEAT',
              'SHEET', 'SITE', 'LINK', 'CISPEP', 'SITE', 'CRYST1', 'MTRIX1', 'MTRIX2', 'MTRIX3',
-             'ORIGX1', 'ORIGX2', 'ORIGX3', 'SSBOND', 'MODRES', 'SPRSDE', 'DBREF1',
+             'ORIGX1', 'ORIGX2', 'ORIGX3', 'SSBOND', 'MODRES', 'SPRSDE', 'DBREF1', 'OBSLTE',
              'SCALE1', 'SCALE2', 'SCALE3', 'SEQRES', 'MASTER', 'END', 'NUMMDL', 'MDLTYP',
              'SPLIT', 'HYDBND', 'SIGUIJ', 'DBREF2', 'SLTBRG'}  # TODO: Handle Multiple Models
+
+BACKBONE_ATOMS = ['CA', 'C', 'N', 'O']
 
 
 def download_pdb(pdb, outdir="../data/pdbs_n"):
@@ -120,7 +123,7 @@ class Atom(object):
         atom_num = self.num
         atom_name = self.name
         res_num = self.res_num
-        aaa = self.res._name
+        aaa = AAA[self.res.name]
         chain_id = self.chain_id
         occup = self.occup
         temp = self.temp
@@ -164,7 +167,7 @@ class Residue(object):
         self.atoms = atoms
         self.chain = chain
         self.index = index
-        self.num = num
+        self.num = num   # Not necessarily numeric
         self._name = three_letter_name
 
     @property
@@ -172,18 +175,26 @@ class Residue(object):
         return to_one_letter(self._name)
 
     @property
-    def ca(self):
-        calpha = [a for a in self.atoms if a.name == "CA"]
-        if len(calpha) == 0:
+    def center(self):
+        return np.mean([a.coord for a in self.atoms], axis=0)
+
+    def get_atom_by_name(self, name):
+        x = [a for a in self.atoms if a.name == name]
+        if len(x) == 0:
             return None
-        return calpha[0]
+        return x[0]
 
     @property
-    def cb(self):
-        cbeta = [a for a in self.atoms if a.name == "CB"]
-        if len(cbeta) == 0:
-            return None
-        return cbeta[0]
+    def ca(self):
+        return self.get_atom_by_name("CA")
+
+    @property
+    def c(self):
+        return self.get_atom_by_name("C")
+
+    @property
+    def n(self):
+        return self.get_atom_by_name("N")
 
     @property
     def chain_id(self):
@@ -203,7 +214,7 @@ class Residue(object):
         return hash((self.chain, self.num, self._name))
 
     def __str__(self):
-        return "<Residue %s:%d>" % (self._name, self.num)
+        return "<Residue %s:%s>" % (self._name, self.num)
 
 
 class Chain(object):
@@ -309,7 +320,7 @@ class PDB(object):
             f.writelines(lines)
 
 
-def _handle_line(line, atoms, residues, chains, pdb, chain_id='', residue_num=0):
+def _handle_line(line, atoms, residues, chains, pdb, chain_id='A', residue_num=0):
 
     if not line:
         return atoms, residues, chains, chain_id, residue_num
@@ -318,7 +329,7 @@ def _handle_line(line, atoms, residues, chains, pdb, chain_id='', residue_num=0)
     if typ in UNHANDLED:
         pass
     elif typ == 'MODEL':
-        raise NotImplementedError("PDB: %s contains more than one model" % pdb)
+        pass
     elif typ == 'HEADER':
         pass
     elif typ == 'TITLE':
@@ -326,12 +337,13 @@ def _handle_line(line, atoms, residues, chains, pdb, chain_id='', residue_num=0)
 
     elif typ == 'ATOM' or typ == 'HETATM':
         # https://www.cgl.ucsf.edu/chimera/docs/UsersGuide/tutorials/pdbintro.html
-        l_line = line[6:11], line[12:16], line[17:20], line[21], line[22:26], \
+        l_line = line[6:11], line[12:16], line[17:20], line[21], line[22:27], \
                  line[30:38], line[38:46], line[46:54], \
                  line[54:60], line[60:66], line[72:76], line[76:78]
         l_line = [s.strip() for s in l_line]
         atom_num, atom_name, res_name, chain_id, res_num, x, y, z, occup, temp, ident, sym = l_line
-        atom_num, res_num = int(atom_num), int(res_num)
+        chain_id = chain_id if chain_id else 'A'            # TODO: why modeller outputs '' chain_id?
+        atom_num, res_num = int(atom_num), res_num
 
         try:
             occup, temp = float(occup), float(temp)
@@ -375,24 +387,35 @@ def _handle_line(line, atoms, residues, chains, pdb, chain_id='', residue_num=0)
 
 
 def parse_pdb(pdb, fd, chain_dict={}):
-
     line = fd.readline()
     atoms, residues, chains, chain_id, res_num = _handle_line(line, [], [], [], pdb)
+    models = []
     while line:
+        while line and line.split()[0] != 'ENDMDL':
+            atoms, residues, chains, chain_id, res_num = _handle_line(line, atoms, residues, chains, pdb, chain_id, res_num)
+            line = fd.readline()
+        st = PDB(pdb, [c for c in chains if len(c) > 0], chain_dict)
+        models.append(st)
         line = fd.readline()
-        atoms, residues, chains, chain_id, res_num = _handle_line(line, atoms, residues, chains, pdb, chain_id, res_num)
-
-    st = PDB(pdb, [c for c in chains if len(c) > 0], chain_dict)
-
-    return st
+    return models[0]
 
 
 def parse_pdb2(pdb, path):
     return parse_pdb(pdb, open(path, "r"))
 
 
+def to_fasta(structs, out_file):
+    lines = []
+    for st in structs:
+        lines.extend([">%s\n%s\n" % (c.id, c.seq) for c in st.chains.values()])
+    with open(out_file, "w+") as f:
+        f.writelines(lines)
+
+
 if __name__ == "__main__":
     import os.path as osp
+    st = parse_pdb("2IMM", open(osp.join("..", "data", "mutation_data_sets", "pdbs", "2imm.pdb"), 'r'))
+    print(str(st['A'][30]), str(st['A'][31]))
     pdb = "4CPA"
     fd = open(osp.join("..", "data", 'PDBs',  "%s.pdb" % pdb), 'r')
     struct = parse_pdb(pdb, fd)
