@@ -6,18 +6,19 @@ import numpy as np
 import pandas as pd
 import os.path as osp
 
-import stride
+from stride import *
 from modeller import *
 from aaindex import *
 from pdb_utils import *
 from grid_utils import *
 from skempi_consts import *
+from hhblits import *
 
 
 class MSA(object):
     def __init__(self, pdb, chain):
         uid = "%s_%s.aln" % (pdb, chain)
-        with open(osp.join("..", "hhblits", uid), 'r') as f:
+        with open(osp.join("hhblits", uid), 'r') as f:
             lines = f.readlines()
         kvs = [[s for s in line.split(' ') if s] for line in lines]
         msa = [(k.strip(), v.strip()) for k, v in kvs]
@@ -60,7 +61,7 @@ class MSA(object):
 class Profile(object):
     def __init__(self, pdb, chain):
         uid = "%s_%s.prof" % (pdb, chain)
-        df = pd.read_csv(osp.join("..", "hhblits", uid), sep=',')
+        df = pd.read_csv(osp.join("hhblits", uid), sep=',')
         self._profile = [df.loc[i].to_dict() for i in range(len(df))]
 
     def __getitem__(self, t):
@@ -70,37 +71,6 @@ class Profile(object):
 
     def __len__(self):
         return len(self._profile)
-
-
-class Stride(object):
-    def __init__(self, stride_df):
-        self._dict = {}
-        for i, row in stride_df.iterrows():
-            d_row = row.to_dict()
-            try:
-                chain_id = d_row["Chain"]
-                res_i = int(d_row["Res"]) - 1
-            except ValueError as e:
-                continue
-            self._dict[(chain_id, res_i)] = d_row
-
-    def __getitem__(self, t):
-        chain_id, res_i = t
-        try: return self._dict[(chain_id, res_i)]
-        except KeyError: return {'ASA': -1., 'ASA_Chain': -1.}
-
-
-def get_stride(pdb_struct, ca, cb):
-    modelname = pdb_struct.pdb
-    pdb = modelname[:4]
-    pdb_pth = osp.join('stride', modelname, '%s_%s_%s.pdb' % (pdb, ca, cb))
-    out_pth = osp.join('stride', modelname, '%s_%s_%s.out' % (pdb, ca, cb))
-    if not osp.exists(osp.dirname(pdb_pth)):
-        os.makedirs(osp.dirname(pdb_pth))
-    if not osp.exists(out_pth):
-        pdb_struct.to_pdb(pdb_pth)
-        stride.main(pdb_pth, ca, cb, out_pth)
-    return Stride(pd.read_csv(out_pth))
 
 
 def zscore_filter(ys):
@@ -132,6 +102,7 @@ class SkempiStruct(PDB):
         for c in self._chains:
             for i, r in enumerate(c.residues):
                 assert r.index == i
+                r.ss = self.get_ss(c.chain_id, i)
                 r.consv = self.get_consrv(c.chain_id, i)
                 r.acc1 = self.get_acc1(c.chain_id, i)
                 r.acc2 = self.get_acc2(c.chain_id, i)
@@ -160,14 +131,20 @@ class SkempiStruct(PDB):
         if w == 'X': return 0.0     # zero information
         return -np.log(max(self.get_profile(chain_id)[(posi, w)], eps))
 
+    def get_ss(self, chain_id, posi):
+        try: return self.stride[(chain_id, posi)]["SS"]
+        except KeyError: return 'C'
+
     def get_acc1(self, chain_id, posi):
-        d = (lambda dic: dic["ASA"])(self.stride[(chain_id, posi)])
+        try: d = self.stride[(chain_id, posi)]["ASA"]
+        except KeyError: return 0.0
         w = self[chain_id][posi].name
         if w == 'X': return 1 - (float(d) / np.mean(MaxASA_emp.values()))
         return 1 - (float(d) / MaxASA_emp[w])
 
     def get_acc2(self, chain_id, posi):
-        d = (lambda dic: dic["ASA_Chain"] - dic["ASA"])(self.stride[(chain_id, posi)])
+        try: d = (lambda dic: dic["ASA_Chain"] - dic["ASA"])(self.stride[(chain_id, posi)])
+        except KeyError: return 0.0
         w = self[chain_id][posi].name
         if w == 'X': return float(d) / np.mean(MaxASA_emp.values())
         return float(d) / MaxASA_emp[w]
@@ -202,8 +179,7 @@ class SkempiRecord(object):
         self.mutant = None
         assert all([skempi_struct[m.chain_id][m.i].name == m.w for m in mutations])
         self.mutations = mutations
-        if load_mutant:
-            self.init_mutant()
+        if load_mutant: self.load_mutant()
         self.reverse = False
 
     @property
@@ -214,7 +190,7 @@ class SkempiRecord(object):
     def pdb(self):
         return self.struct.pdb[:4].upper()
 
-    def init_mutant(self):
+    def load_mutant(self):
         wt = self.struct
         mutantname, ws = apply_modeller(wt, self.mutations)
         pth = osp.join(ws, "%s.pdb" % mutantname)
@@ -287,6 +263,13 @@ class Mutation(object):
         return hash(self._str)
 
 
+def parse_mutations(mutations_str, reverse=False, sep=','):
+    mutations = [Mutation(s) for s in mutations_str.split(sep)]
+    if reverse:
+        return [reversed(mut) for mut in mutations]
+    else:
+        return mutations
+
 # class DDGMapper(object):
 #
 #     def __init__(self, records):
@@ -301,10 +284,8 @@ class Mutation(object):
 #             return np.asarray([self._dic[r]]) if r in self._dic else self._model.predict([r.features])
 
 
-def parse_mutations(mutations_str, reverse=False, sep=','):
-    mutations = [Mutation(s) for s in mutations_str.split(sep)]
-    if reverse: return [reversed(mut) for mut in mutations]
-    else: return mutations
+def contact_map(struct, chain_id, posi):
+    pass
 
 
 def comp_cp_in_shell(mut, struct, mat, inner, outer):
@@ -592,24 +573,44 @@ class Dataset(object):
         return len(self.records)
 
 
-def load_protherm(dataframe, path_to_pdbs, load_mut=True, min_seq_length=0):
-    structs = {}
+def protherm_generator(dataframe, path_to_pdbs, load_mut=True, min_seq_length=0):
+    structs, records = {}, {}
     for i in tqdm(range(len(dataframe)), "loading structures"):
         row = dataframe.loc[i]
-        if row.PDB in structs: continue
-        pth = osp.join(path_to_pdbs, "%s.pdb" % row.PDB.lower())
-        st = parse_pdb(row.PDB, open(pth, 'r'))
-        if np.any([len(c) <= min_seq_length for c in st._chains]): continue
-        structs[row.PDB] = ProthermStruct(st)
-    records = {}
-    for i in tqdm(range(len(dataframe)), "loading records"):
-        row = dataframe.loc[i]
-        if row.PDB not in structs: continue
-        mutations = parse_mutations(row.Mut)
-        r = ProthermRecord(structs[row.PDB], mutations, [row.DDG], load_mutant=load_mut)
-        if hash(r) in records: records[hash(r)].ddg_arr.append(row.DDG)
-        else: records[hash(r)] = r
-    return records.values()
+        if row.PDB in structs:
+            st = structs[row.PDB]
+        else:
+            pth = osp.join(path_to_pdbs, "%s.pdb" % row.PDB.lower())
+            st = structs[row.PDB] = parse_pdb(row.PDB, open(pth, 'r'))
+        if np.any([len(c) <= min_seq_length for c in st._chains]):
+            continue
+        key = (row.PDB, row.Mut)
+        if key not in records:
+            records[key] = [st]
+        records[key].append([row.DDG])
+    prepare_alignment_profiles(structs.values())
+    structs = {}
+    for (_, ms), v in tqdm(records.items(), "loading records"):
+        key, ddg_arr = v[0], v[1:]
+        if key not in structs:
+            structs[key] = ProthermStruct(key)
+        st, ddg_arr = structs[key], v[1:]
+        yield ProthermRecord(st, parse_mutations(ms), ddg_arr, load_mutant=load_mut)
+
+
+def load_protherm(dataframe, path_to_pdbs, load_mut=True, min_seq_length=0):
+    return list(protherm_generator(dataframe, path_to_pdbs, load_mut, min_seq_length))
+
+
+def prepare_alignment_profiles(structs):
+    seqs = []
+    for st in structs:
+        seqs.extend([(c.id, c.seq) for c in st._chains if not osp.exists('hhblits/%s.aln' % c.id)])
+    run_hhblits(seqs)
+    seqs = []
+    for st in structs:
+        seqs.extend([(c.id, c.seq) for c in st._chains if not osp.exists('hhblits/%s.prof' % c.id)])
+    comp_profiles(seqs)
 
 
 def load_varibench(): return load_protherm(varib_df, PROTHERM_PDBs, True, 0)
@@ -618,28 +619,35 @@ def load_varibench(): return load_protherm(varib_df, PROTHERM_PDBs, True, 0)
 def load_s2648(): return load_protherm(s2648_df, PROTHERM_PDBs, True, 0)
 
 
-def load_skempi(dataframe, path_to_pdbs, load_mut=True , min_seq_length=0):
-    structs = {}
+def skempi_generator(dataframe, path_to_pdbs, load_mut=True, min_seq_length=0):
+    structs, records = {}, {}
     for i in tqdm(range(len(dataframe)), "loading structures"):
         row = dataframe.loc[i]
-        modelname, ca, cb = t = tuple(row.Protein.split('_'))
-        if t in structs: continue
-        pth = osp.join(path_to_pdbs, "%s.pdb" % t[0])
-        st = parse_pdb(modelname, open(pth, 'r'))
-        if np.any([len(c) <= min_seq_length for c in st._chains]): continue
-        structs[t] = SkempiStruct(st, ca, cb)
-    records = {}
-    for i in tqdm(range(len(dataframe)), "loading records"):
-        row = dataframe.loc[i]
-        muts = row["Mutation(s)_cleaned"]
-        ddg = row.DDG
         t = tuple(row.Protein.split('_'))
-        if t not in structs: continue
-        st = structs[t]
-        r = SkempiRecord(st, parse_mutations(muts), [ddg], load_mutant=load_mut)
-        if hash(r) in records: records[hash(r)].ddg_arr.append(ddg)
-        else: records[hash(r)] = r
-    return records.values()
+        if t in structs:
+            st = structs[t]
+        else:
+            pth = osp.join(path_to_pdbs, "%s.pdb" % t[0])
+            st = structs[t] = parse_pdb(t[0], open(pth, 'r'))
+        if np.any([len(c) <= min_seq_length for c in st._chains]):
+            continue
+        key = (t, row["Mutation(s)_cleaned"])
+        if key not in records:
+            records[key] = [st]
+        records[key].append([row.DDG])
+    prepare_alignment_profiles(structs.values())
+    structs = {}
+    for k, v in tqdm(records.items(), "loading records"):
+        (_, ca, cb), ms = k
+        key = (v[0], ca, cb)
+        if key not in structs:
+            structs[key] = SkempiStruct(v[0], ca, cb)
+        st, ddg_arr = structs[key], v[1:]
+        yield SkempiRecord(st, parse_mutations(ms), ddg_arr, load_mutant=load_mut)
+
+
+def load_skempi(dataframe, path_to_pdbs, load_mut=True, min_seq_length=0):
+    return list(skempi_generator(dataframe, path_to_pdbs, load_mut, min_seq_length))
 
 
 def load_skempi_v1(df): return load_skempi(df[df.version == 1].reset_index(drop=True), SKMEPI2_PDBs, False)
@@ -648,19 +656,19 @@ def load_skempi_v1(df): return load_skempi(df[df.version == 1].reset_index(drop=
 def load_skempi_v2(df): return load_skempi(df[df.version == 2].reset_index(drop=True), SKMEPI2_PDBs, False)
 
 
-def prepare_zemu():
-    df = pd.read_csv(osp.join('..', 'data', 'dataset_ZEMu.2.csv'))
-    df2 = skempi_df_v2
-    df1 = skempi_df
-    df["DDG"] = df[" Gexp (kcal/mol)"]
-    df["ZEMu"] = df[" G ZEMu (kcal/mol) \tID"]
-    df["Mutation(s)_cleaned"] = df[" Mutant"].apply(lambda s: s.replace(".", ","))
-    pdbs, _, _ = zip(*[prot.split('_') for prot in df2["#Pdb"]])
-    D = {pdb: cpx for pdb, cpx in zip(pdbs, df2["#Pdb"])}
-    pdbs, _, _ = zip(*[prot.split('_') for prot in df1.Protein])
-    D.update({pdb: cpx for pdb, cpx in zip(pdbs, df1.Protein)})
-    df["Protein"] = [D[p] for p in df["\PDB ID"]]
-    return df
+# def prepare_zemu():
+#     df = pd.read_csv(osp.join('..', 'data', 'dataset_ZEMu.2.csv'))
+#     df2 = skempi_df_v2
+#     df1 = skempi_df
+#     df["DDG"] = df[" Gexp (kcal/mol)"]
+#     df["ZEMu"] = df[" G ZEMu (kcal/mol) \tID"]
+#     df["Mutation(s)_cleaned"] = df[" Mutant"].apply(lambda s: s.replace(".", ","))
+#     pdbs, _, _ = zip(*[prot.split('_') for prot in df2["#Pdb"]])
+#     D = {pdb: cpx for pdb, cpx in zip(pdbs, df2["#Pdb"])}
+#     pdbs, _, _ = zip(*[prot.split('_') for prot in df1.Protein])
+#     D.update({pdb: cpx for pdb, cpx in zip(pdbs, df1.Protein)})
+#     df["Protein"] = [D[p] for p in df["\PDB ID"]]
+#     return df
 
 
 def prepare_skempi_v2():
@@ -732,6 +740,7 @@ except IOError as e:
 
 if __name__ == "__main__":
     from tqdm import tqdm
+    st = ProthermStruct(parse_pdb("1LVE", open(osp.join("..", "data", "mutation_data_sets", "pdbs", "1lve.pdb"), 'r')))
     i, structs = 29, {}
     row = skempi_df.loc[i]
     t = tuple(row.Protein.split('_'))

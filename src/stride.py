@@ -1,4 +1,5 @@
 import os
+import os.path as osp
 import sys
 import subprocess
 import numpy as np
@@ -6,6 +7,20 @@ import pandas as pd
 
 
 STRIDE_EXE = '../stride/stride'
+
+
+class Stride(object):
+    def __init__(self, stride_df):
+        self.dic = {}
+        for i, row in stride_df.iterrows():
+            d_row = row.to_dict()
+            chain_id = d_row["Chain"]
+            res_i = int(d_row["Res"]) - 1
+            self.dic[(chain_id, res_i)] = d_row
+
+    def __getitem__(self, t):
+        chain_id, res_i = t
+        return self.dic[(chain_id, res_i)]
 
 
 def delta_sasa(chainA, chainB, path_to_pdb):
@@ -28,7 +43,7 @@ def delta_sasa(chainA, chainB, path_to_pdb):
     asa = np.asarray(list(df_complex.ASA))
     assert np.all(ress == np.asarray(sorted(ress_a + ress_b)))
     assert np.any(np.asarray(asa_a + asa_b) != asa)
-    df_complex["ASA_Chain"] = np.asarray(asa_a + asa_b)
+    df_complex.ASA_Chain = np.asarray(asa_a + asa_b)
     # assert proc1.returncode == 0
     # assert proc2.returncode == 0
     return df_complex
@@ -49,6 +64,19 @@ def parse_stride(out):
 
     return pd.DataFrame({"AA": aas, "Chain": chains, "Res": ress,
                          "SS": sss, "Phi": phis, "Psi": psis, "ASA": asas})
+
+
+def get_stride(pdb_struct, ca, cb):
+    modelname = pdb_struct.pdb
+    pdb = modelname[:4]
+    pdb_pth = osp.join('stride', modelname, '%s_%s_%s.pdb' % (pdb, ca, cb))
+    out_pth = osp.join('stride', modelname, '%s_%s_%s.out' % (pdb, ca, cb))
+    if not osp.exists(osp.dirname(pdb_pth)):
+        os.makedirs(osp.dirname(pdb_pth))
+    if not osp.exists(out_pth):
+        pdb_struct.to_pdb(pdb_pth)
+        main(pdb_pth, ca, cb, out_pth)
+    return Stride(pd.read_csv(out_pth))
 
 
 def main(*args, **kwargs):

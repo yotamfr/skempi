@@ -176,7 +176,8 @@ class Residue(object):
 
     @property
     def center(self):
-        return np.mean([a.coord for a in self.atoms], axis=0)
+        # return np.mean([a.coord for a in self.atoms], axis=0)
+        return self.get_atom_by_name("CA").coord
 
     def get_atom_by_name(self, name):
         x = [a for a in self.atoms if a.name == name]
@@ -286,16 +287,20 @@ class PDB(object):
         assert not np.any([a.res.chain is None for a in self._atoms])
 
     @property
+    def pdb(self):
+        return self._id
+
+    @property
     def chains(self):
         return {c.chain_id: c for c in self._chains}
 
     @property
-    def atoms(self):
-        return self._atoms
+    def residues(self):
+        return [res for c in self._chains for res in c.residues]
 
     @property
-    def pdb(self):
-        return self._id
+    def atoms(self):
+        return self._atoms
 
     def __iter__(self):
         for chain in self._chains:
@@ -397,7 +402,8 @@ def parse_pdb(pdb, fd, chain_dict={}):
         st = PDB(pdb, [c for c in chains if len(c) > 0], chain_dict)
         models.append(st)
         line = fd.readline()
-    return models[0]
+    try: return models[0]
+    except IndexError: print(pdb)
 
 
 def parse_pdb2(pdb, path):
@@ -414,8 +420,8 @@ def to_fasta(structs, out_file):
 
 if __name__ == "__main__":
     import os.path as osp
-    st = parse_pdb("2IMM", open(osp.join("..", "data", "mutation_data_sets", "pdbs", "2imm.pdb"), 'r'))
-    print(str(st['A'][30]), str(st['A'][31]))
+    st = parse_pdb("1LVE", open(osp.join("..", "data", "mutation_data_sets", "pdbs", "1lve.pdb"), 'r'))
+    st.to_pdb("1LVE.pdb")
     pdb = "4CPA"
     fd = open(osp.join("..", "data", 'PDBs',  "%s.pdb" % pdb), 'r')
     struct = parse_pdb(pdb, fd)

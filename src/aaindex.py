@@ -358,6 +358,30 @@ MaxASA_theory = {
     "V": 174.0
 }
 
+# http://www.tiem.utk.edu/~gross/bioed/webmodules/aminoacid.htm
+AA_freq = {
+    "A": 0.074,
+    "R": 0.042,
+    "N": 0.044,
+    "D": 0.059,
+    "C": 0.033,
+    "E": 0.058,
+    "Q": 0.037,
+    "G": 0.074,
+    "H": 0.029,
+    "I": 0.038,
+    "L": 0.076,
+    "K": 0.072,
+    "M": 0.018,
+    "F": 0.040,
+    "P": 0.050,
+    "S": 0.081,
+    "T": 0.062,
+    "W": 0.013,
+    "Y": 0.033,
+    "V": 0.068,
+}
+
 if __name__ == "__main__":
     import numpy as np
     keys = [(a1, a2) for a1 in amino_acids for a2 in amino_acids]
