@@ -10,13 +10,14 @@ STRIDE_EXE = '../stride/stride'
 
 
 class Stride(object):
-    def __init__(self, stride_df):
+    def __init__(self, stride_df, pdb_struct):
         self.dic = {}
         for i, row in stride_df.iterrows():
             d_row = row.to_dict()
-            chain_id = d_row["Chain"]
-            res_i = int(d_row["Res"]) - 1
-            self.dic[(chain_id, res_i)] = d_row
+            chain_id = str(d_row["Chain"])
+            if str(d_row["Res"]) in pdb_struct[chain_id].index:
+                res_i = pdb_struct[chain_id].index[str(d_row["Res"])]
+                self.dic[(chain_id, res_i)] = d_row
 
     def __getitem__(self, t):
         chain_id, res_i = t
@@ -76,7 +77,7 @@ def get_stride(pdb_struct, ca, cb):
     if not osp.exists(out_pth):
         pdb_struct.to_pdb(pdb_pth)
         main(pdb_pth, ca, cb, out_pth)
-    return Stride(pd.read_csv(out_pth))
+    return Stride(pd.read_csv(out_pth), pdb_struct)
 
 
 def main(*args, **kwargs):

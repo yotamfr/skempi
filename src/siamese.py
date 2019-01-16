@@ -1,338 +1,193 @@
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.autograd import Variable
+from torch import nn
 from torch import optim
+from tqdm import tqdm
 
-from tempfile import gettempdir
-from scipy.stats import pearsonr
+from torch_utils import *
+from skempi_lib import *
+from loader import *
 
-from pymongo import MongoClient
-from bson.binary import Binary
-import pickle
+os.environ["CUDA_VISIBLE_DEVICES"] = '0'
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+num_bins = 301
+DDG = np.asarray(s2648_df.DDG.values.tolist() + varib_df.DDG.values.tolist())
+Min, Max = min(min(DDG), min(-DDG)), max(max(DDG), max(-DDG))
+bins = np.linspace(Min - 0.1, Max + 0.1, num_bins)
+bins_tensor = torch.tensor(bins, dtype=torch.float, device=device)
 
-try:
-    from src.pytorch_utils import *
-    from src.skempi_utils import *
-    from src.grid_utils import *
-except ImportError:
-    from pytorch_utils import *
-    from skempi_utils import *
-    from grid_utils import *
-
-USE_CUDA = True
+DEBUG = False
 BATCH_SIZE = 32
-LR = 0.0001
+LR = 0.001
 
-rotations_x = [rot_x(r * 2 * math.pi) for r in np.arange(0, .99, .25)]
-rotations_y = [rot_y(r * 2 * math.pi) for r in np.arange(0, .99, .25)]
-rotations_z = [rot_z(r * 2 * math.pi) for r in np.arange(0, .99, .25)]
-augmentations = rotations_x + rotations_y + rotations_z
+np.random.seed(101)
 
 
-class SingleMutationLoader(object):
+class Conv1(nn.Module):
+    def __init__(self, nc, ngf, ndf, latent_variable_size):
+        super(Conv1, self).__init__()
 
-    def __init__(self, dataframe, augmentations, vcache, debug):
-        self._records = []
-        self._curr = 0
-        for _, row in dataframe.iterrows():
-            for rot in augmentations:
-                self._records.append([rot, row])
-        self._vcache = vcache
-        if debug:
-            self.p = np.zeros(len(self))
-        else:
-            self.p = np.random.permutation(len(self))
+        self.nc = nc
+        self.ngf = ngf
+        self.ndf = ndf
+        self.latent_variable_size = latent_variable_size
 
-    def reset(self, debug=False):
-        if debug:
-            self.p = np.zeros(len(self))
-        else:
-            self.p = np.random.permutation(len(self))
-        self._curr = 0
+        # encoder
+        self.e1 = nn.Conv3d(nc, ndf, 5, 1, 1)
+        self.bn1 = nn.BatchNorm3d(ndf)
 
-    def __iter__(self):
-        return self
+        self.e2 = nn.Conv3d(ndf, ndf * 2, 3, 1, 1)
+        self.bn2 = nn.BatchNorm3d(ndf * 2)
 
-    def next(self):
-        if self._curr < len(self._records):
-            ix = self.p[self._curr]
-            try:
-                voxels1, voxels2, ddg = self._vcache[ix]
-            except KeyError:
-                rot, row = self._records[ix]
-                rec1 = skempi_record_from_row(row)
-                rec2 = reversed(rec1)
-                assert rec1.ddg == -rec2.ddg
-                assert len(rec1.mutations) == 1
-                assert len(rec2.mutations) == 1
-                mut1 = rec1.mutations[0]
-                struct1 = rec1.struct
-                res1 = struct1[mut1.chain_id][mut1.i]
-                mut2 = rec2.mutations[0]
-                struct2 = rec2.struct
-                res2 = struct2[mut2.chain_id][mut2.i]
-                assert mut1.i == mut2.i
-                voxels1 = get_4channel_voxels(struct1, res1, rot, 20)
-                voxels2 = get_4channel_voxels(struct2, res2, rot, 20)
-                ddg = rec1.ddg
-                self._vcache[ix] = (voxels1, voxels2, ddg)
-            self._curr += 1
-            return voxels1, voxels2, [ddg]
-        else:
-            raise StopIteration
+        self.e3 = nn.Conv3d(ndf * 2, ndf * 4, 3, 1, 1)
+        self.bn3 = nn.BatchNorm3d(ndf * 4)
 
-    def __next__(self):
-        self.next()
+        self.e4 = nn.Conv3d(ndf * 4, ndf * 8, 3, 1, 1)
+        self.bn4 = nn.BatchNorm3d(ndf * 8)
 
-    def __str__(self):
-        return "<SingleMutationLoader: %d>" % len(self)
+        self.fc1 = nn.Linear(ndf * 8, latent_variable_size)
+        self.fc2 = nn.Linear(ndf * 8, latent_variable_size)
 
-    def __len__(self):
-        return len(self._records)
+        # aa classification
+        self.fc3 = nn.Linear(ndf * 8, 20)
+
+        ## DDG classification
+        self.fc4 = nn.Linear(ndf * 8, latent_variable_size)
+        self.fc5 = nn.Linear(latent_variable_size + 20 * 3, num_bins)
+
+        self.leakyrelu = nn.LeakyReLU(0.2, inplace=True)
+        self.mp = nn.MaxPool3d(2)
+
+    def encode(self, x):
+        h1 = self.mp(self.leakyrelu(self.bn1(self.e1(x))))
+        h2 = self.mp(self.leakyrelu(self.bn2(self.e2(h1))))
+        h3 = self.mp(self.leakyrelu(self.bn3(self.e3(h2))))
+        h4 = self.mp(self.leakyrelu(self.bn4(self.e4(h3))))
+        return h4.view(h4.size(0), -1)
+
+    def forward(self, x, w, m):
+        enc = self.encode(x)
+        aa = self.fc3(enc)
+        h = self.fc4(enc)
+        ddg = self.fc5(torch.cat([h, aa, w, m], 1))
+        return aa, ddg
 
 
-def batch_generator(loader, batch_size=BATCH_SIZE):
-
-    def prepare_batch(data1, data2, labels):
-        dat_var1 = Variable(torch.FloatTensor(data1))
-        dat_var2 = Variable(torch.FloatTensor(data2))
-        lbl_var = Variable(torch.FloatTensor(labels))
-        if USE_CUDA:
-            dat_var1 = dat_var1.cuda()
-            dat_var2 = dat_var2.cuda()
-            lbl_var = lbl_var.cuda()
-        return dat_var1, dat_var2, lbl_var
-    stop = False
-    while not stop:
-        batch = []
-        while len(batch) < batch_size:
-            try:
-                batch.append(next(loader))
-            except StopIteration:
-                stop = True
-                break
-        if len(batch) == 0:
-            break
-        dat1, dat2, lbl = zip(*batch)
-        yield prepare_batch(dat1, dat2, lbl)
+def pearsonr_torch(out, tgt):
+    x = bins_tensor.gather(0, tgt)
+    y = bins_tensor.gather(0, torch.argmax(out, 1))
+    mean_x = torch.mean(x)
+    mean_y = torch.mean(y)
+    xm = x.sub(mean_x)
+    ym = y.sub(mean_y)
+    r_num = xm.dot(ym)
+    r_den = torch.norm(xm, 2) * torch.norm(ym, 2)
+    r_val = r_num / r_den
+    return r_val
 
 
-class CNN3dV1(nn.Module):    # https://bmcbioinformatics.biomedcentral.com/articles/10.1186/s12859-017-1702-0#Sec28
-
-    def __init__(self, dropout=0.1):
-        super(CNN3dV1, self).__init__()
-
-        self.features = nn.Sequential(
-            nn.Conv3d(4, 8, kernel_size=(5, 5, 5)),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout),
-            nn.Conv3d(8, 16, kernel_size=(1, 1, 1)),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout),
-            nn.MaxPool3d((2, 2, 2)),
-            nn.Conv3d(16, 32, kernel_size=(3, 3, 3)),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout),
-            nn.MaxPool3d((2, 2, 2)),
-            nn.Conv3d(32, 64, kernel_size=(1, 1, 1)),
-            nn.ReLU(inplace=True),
-        )
-        self.info = nn.Sequential(
-            nn.Linear(1728, 500),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout),
-            nn.Linear(500, 100),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout),
-        )
-        self.regressor = nn.Sequential(
-            nn.Linear(100, 10),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout),
-            nn.Linear(10, 1)
-        )
-
-    def forward(self, x):
-        x = self.features(x)
-        x = x.view(len(x), -1)
-        x = self.info(x)
-        x = self.regressor(x)
-        return x
+def get_loss(y_hat1, y_hat2, y1, y2, criterion=FocalLoss(gamma=2)):
+    loss1 = criterion(y_hat1, y1.unsqueeze(1))
+    loss2 = criterion(y_hat2, y2.unsqueeze(1))
+    return loss1 + loss2
 
 
-def get_loss(y_hat, y):
-    loss = (y - y_hat).pow(2).sum() / y.size(0)
-    return loss
+def preprocess_batch(records, start, end):
+    y1 = torch.tensor(np.digitize([rec.ddg for rec in records[start:end]], bins), dtype=torch.long, device=device)
+    y2 = torch.tensor(np.digitize([-rec.ddg for rec in records[start:end]], bins), dtype=torch.long, device=device)
+    vox1 = [load_single_position(rec.struct, rec.struct.get_residue(rec.mutations[0]), rad=16., reso=1.25)[1]
+            for rec in records[start:end]]
+    vox2 = [load_single_position(rec.mutant, rec.mutant.get_residue(rec.mutations[0]), rad=16., reso=1.25)[1]
+            for rec in records[start:end]]
+    w = torch.tensor([amino_acids.index(rec.mutations[0].w) for rec in records[start:end]], dtype=torch.long,
+                     device=device)
+    m = torch.tensor([amino_acids.index(rec.mutations[0].m) for rec in records[start:end]], dtype=torch.long,
+                     device=device)
+    w = torch.zeros([end - start, 20], dtype=torch.float, device=device).scatter_(1, w.unsqueeze(1), 1)
+    m = torch.zeros([end - start, 20], dtype=torch.float, device=device).scatter_(1, m.unsqueeze(1), 1)
+    x1 = torch.cat([v.unsqueeze(0) for v in vox1], 0)
+    x2 = torch.cat([v.unsqueeze(0) for v in vox2], 0)
+    return x1, x2, y1, y2, w, m
 
 
-def evaluate(model, batch_generator, length_xy, batch_size=BATCH_SIZE):
-    model.eval()
-    pbar = tqdm(total=length_xy, desc="calculation...")
-    err, i = 0, 0
-    preds = np.zeros((length_xy, 1))
-    truth = np.zeros((length_xy, 1))
-    for i, (x1, x2, y) in enumerate(batch_generator):
-        y1 = model(x1)
-        y2 = model(x2)
-        y_hat = y1 - y2
-        loss = get_loss(y_hat, y)
-        err += loss.item()
-        start = i * batch_size
-        end = i * batch_size + len(y)
-        preds[start:end, :] = y_hat.data.cpu().numpy()
-        truth[start:end, :] = y.data.cpu().numpy()
-        pbar.update(len(y))
-        cor, _ = pearsonr(preds[:end, :], truth[:end, :])
-        e = err / (i + 1)
-        pbar.set_description("Validation Loss:%.4f, Perasonr: %.4f" % (e, cor))
-    pbar.close()
-    return e, cor
-
-
-def train(model, opt, adalr, batch_generator, length_xy):
-
+def train(records, model, opt, batch_size):
     model.train()
-
-    pbar = tqdm(total=length_xy, desc="calculating...")
-
-    err = 0
-
-    for i, (x1, x2, y) in enumerate(batch_generator):
-
-        x = torch.cat([x1, x2], 0)
+    pbar = tqdm(range(len(records)), desc="calculating...")
+    n_iter, err, acc = 1., 0., 0.
+    for ibatch in range(0, len(records), batch_size):
+        start = ibatch
+        end = min(batch_size + ibatch, len(records))
+        x1, x2, y1, y2, w, m = preprocess_batch(records, start, end)
         opt.zero_grad()
-        out = model(x)
-        y1 = out[:len(y), :]
-        y2 = out[len(y):, :]
-        y_hat = y1 - y2
-        loss = get_loss(y_hat, y)
-        adalr.update(loss.item())
+        _, y_hat1 = model(x1, w, m)
+        _, y_hat2 = model(x2, m, w)
+        loss = get_loss(y_hat1, y_hat2, y1, y2)
+        pcor = pearsonr_torch(y_hat1, y1)
         err += loss.item()
+        acc += pcor.item()
         loss.backward()
-        opt.step()
-        lr, e = adalr.lr, err/(i + 1)
-        pbar.set_description("Training Loss:%.4f, LR: %.4f" % (e, lr))
-        pbar.update(len(y))
-
+        opt.step_and_update_lr(loss.item())
+        lr, e, a = opt.lr, err / n_iter, acc / n_iter
+        pbar.set_description("Training Loss:%.4f, Perasonr: %.4f, LR: %.5f" % (e, a, lr))
+        pbar.update(end-start)
+        n_iter += 1
     pbar.close()
 
 
-def serialize(obj):
-    return Binary(pickle.dumps(obj, protocol=2))
+def evaluate(records, model, batch_size):
+    model.eval()
+    pbar = tqdm(range(len(records)), desc="calculating...")
+    n_iter, err, acc = 1., 0., 0.
+    for ibatch in range(0, len(records), batch_size):
+        start = ibatch
+        end = min(batch_size + ibatch, len(records))
+        x1, x2, y1, y2, w, m = preprocess_batch(records, start, end)
 
-
-def deserialize(bin_obj):
-    return pickle.loads(bin_obj)
-
-
-class Cache(object):
-
-    def __init__(self, collection, serialize=lambda x: x, deserialize=lambda x: x):
-        self.db = collection
-        self.serialize = serialize
-        self.deserialize = deserialize
-
-    def __setitem__(self, key, item):
-        self.db.update_one({"_id": hash(key)}, {"$set": {"data": self.serialize(item)}}, upsert=True)
-
-    def __getitem__(self, key):
-        load = self.deserialize
-        c = self.db.count({"_id": hash(key)})
-        if c == 0:
-            raise KeyError(key)
-        elif c == 1:
-            return load(self.db.find_one({"_id": hash(key)})["data"])
-        else:
-            raise ValueError("found more than one result for: '%s'" % key)
-
-
-def add_arguments(parser):
-    parser.add_argument("--mongo_url", type=str, default='mongodb://localhost:27017/',
-                        help="Supply the URL of MongoDB")
-    parser.add_argument('-r', '--resume', default='', type=str, metavar='PATH',
-                        help='path to latest checkpoint (default: none)')
-    parser.add_argument("-e", "--eval_every", type=int, default=1,
-                        help="How often to evaluate on the validation set.")
-    parser.add_argument("--num_epochs", type=int, default=200,
-                        help="How many epochs to train the model?")
-    parser.add_argument("-o", "--out_dir", type=str, required=False,
-                        default=gettempdir(), help="Specify the output directory.")
-    parser.add_argument("-s", "--seed", type=int, default=9898,
-                        help="Sets the seed for generating random number.")
-    parser.add_argument("-d", "--device", type=str, choices=["0", "1", "2", "3"],
-                        default="0", help="Choose a device to run on.")
-    parser.add_argument("-g", '--debug', action='store_true', default=True,
-                        help="Run in debug mode.")
+        _, y_hat1 = model(x1, w, m)
+        _, y_hat2 = model(x2, m, w)
+        loss = get_loss(y_hat1, y_hat2, y1, y2)
+        pcor = pearsonr_torch(y_hat1, y1)
+        err += loss.item()
+        acc += pcor.item()
+        lr, e, a = opt.lr, err / n_iter,  acc / n_iter
+        pbar.set_description("Validation Loss:%.4f, Perasonr: %.4f, LR: %.5f" % (e, a, lr))
+        pbar.update(end-start)
+        n_iter += 1
+    pbar.close()
+    return err/n_iter
 
 
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser()
-    add_arguments(parser)
-    args = parser.parse_args()
 
-    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-    os.environ["CUDA_VISIBLE_DEVICES"] = args.device
+    net = Conv1(nc=24, ngf=64, ndf=64, latent_variable_size=256)
+    checkpoint = torch.load('../models/beast_1.45872.tar', map_location=lambda storage, loc: storage)
+    load_checkpoint(net, checkpoint)
+    net.to(device)
 
-    df = skempi_df[[len(parse_mutations(s)) == 1 for s in skempi_df["Mutation(s)_cleaned"]]]
-    training_set = df[[1 <= skempi_group_from_row(row) <= 4 for _, row in df.iterrows()]]
-    validation_set = df[[skempi_group_from_row(row) == 5 for _, row in df.iterrows()]]
+    dfs_freeze(net.bn1)
+    dfs_freeze(net.bn2)
+    dfs_freeze(net.bn3)
+    dfs_freeze(net.bn4)
+    dfs_freeze(net.e1)
+    dfs_freeze(net.e2)
+    dfs_freeze(net.e3)
+    dfs_freeze(net.e4)
+    dfs_freeze(net.fc1)
+    dfs_freeze(net.fc2)
+    dfs_freeze(net.fc3)
 
-    client = MongoClient(args.mongo_url)
-    cache_trn = Cache(client['skempi']['siamese_train'], serialize=serialize, deserialize=deserialize)
-    cache_val = Cache(client['skempi']['siamese_valid'], serialize=serialize, deserialize=deserialize)
+    lim = 500 if DEBUG else None
+    varib = load_protherm(varib_df[:lim], PROTHERM_PDBs, True, 0)
+    s2648 = load_protherm(s2648_df[:lim], PROTHERM_PDBs, True, 0)
+    data = varib + s2648
 
-    loader_trn = SingleMutationLoader(training_set, augmentations, vcache=cache_trn, debug=False)
-    loader_val = SingleMutationLoader(validation_set, [None], vcache=cache_val, debug=False)
+    r = int(len(data) * 0.8)
+    data = np.random.permutation(data)
+    training, validation = data[:r], data[r:]
 
-    net = CNN3dV1()
-    opt = optim.Adam(net.parameters(), lr=LR)
+    opt = ScheduledOptimizer(optim.Adam(net.parameters(), lr=LR), LR, num_iterations=100)
 
-    ckptpath = args.out_dir
-
-    model_summary(net)
-
-    init_epoch = 0
-    num_epochs = args.num_epochs
-
-    # optionally resume from a checkpoint
-    if args.resume:
-        if os.path.isfile(args.resume):
-            print("=> loading checkpoint '%s'" % args.resume)
-            checkpoint = torch.load(args.resume, map_location=lambda storage, loc: storage)
-            init_epoch = checkpoint['epoch']
-            net.load_state_dict(checkpoint['net'])
-            opt.load_state_dict(checkpoint['opt'])
-        else:
-            print("=> no checkpoint found at '%s'" % args.resume)
-
-    adalr = AdaptiveLR(opt, LR, num_iterations=1000)
-
-    # Move models to GPU
-    if USE_CUDA:
-        net = net.cuda()
-    if USE_CUDA and args.resume:
-        optimizer_cuda(opt)
-
-    for epoch in range(init_epoch, num_epochs):
-
-        train(net, opt, adalr, batch_generator(loader_trn), len(loader_trn))
-
-        if epoch < num_epochs - 1 and epoch % args.eval_every != 0:
-            continue
-
-        loss, _ = evaluate(net, batch_generator(loader_val), len(loader_val))
-
-        if VERBOSE:
-            print("[Epoch %d/%d] (Validation Loss: %.4f" % (epoch + 1, num_epochs, loss))
-
-        save_checkpoint({
-            'lr': adalr.lr,
-            'epoch': epoch,
-            'net': net.state_dict(),
-            'opt': opt.state_dict()
-        }, loss, "skempi", ckptpath)
-
-        loader_val.reset(False)
-        loader_trn.reset(False)
+    num_epochs = 20
+    for epoch in range(num_epochs):
+        train(training, net, opt, batch_size=BATCH_SIZE)
+        loss = evaluate(validation, net, batch_size=BATCH_SIZE)
+        print("[Epoch %d/%d] Validation Loss: %.4f" % (epoch + 1, num_epochs, loss))

@@ -1,72 +1,80 @@
 import torch
-import torch.nn as nn
+from torch import nn
 from torch import optim
-import torch.nn.functional as F
-
-from tempfile import gettempdir
 from tqdm import tqdm
 
-from pytorch_utils import *
-from reader_utils import *
-from siamese_utils import *
+from torch_utils import *
+from skempi_lib import *
+from loader import *
+
+os.environ["CUDA_VISIBLE_DEVICES"] = '0'
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+num_bins = 301
+DDG = np.asarray(s2648_df.DDG.values.tolist() + varib_df.DDG.values.tolist())
+Min, Max = min(min(DDG), min(-DDG)), max(max(DDG), max(-DDG))
+bins = np.linspace(Min - 0.1, Max + 0.1, num_bins)
+bins_tensor = torch.tensor(bins, dtype=torch.float, device=device)
+
+DEBUG = False
+BATCH_SIZE = 32
+LR = 0.001
+
+np.random.seed(101)
 
 
-def batch_generator(dataset, batch_size=BATCH_SIZE):
+class Conv1(nn.Module):
+    def __init__(self, nc, ngf, ndf, latent_variable_size):
+        super(Conv1, self).__init__()
 
-    def prepare_batch(dat1, dat2, lbl):
-        dat_var1 = torch.tensor(np.asarray(dat1), dtype=torch.float, device=device)
-        dat_var2 = torch.tensor(np.asarray(dat2), dtype=torch.float, device=device)
-        lbl_var1 = torch.tensor(np.digitize(lbl, bins), dtype=torch.long, device=device)
-        lbl_var2 = torch.tensor(np.digitize(-lbl, bins), dtype=torch.long, device=device)
-        return dat_var1, dat_var2, lbl_var1, lbl_var2
+        self.nc = nc
+        self.ngf = ngf
+        self.ndf = ndf
+        self.latent_variable_size = latent_variable_size
 
-    stop = False
-    while not stop:
-        X, y = [], []
-        while len(y) < batch_size:
-            try:
-                box1, box2, ddg = next(dataset)
-                X.append([box1, box2])
-                y.append(ddg)
-            except StopIteration:
-                stop = True
-                break
-        if len(y) == 0:
-            break
-        X1, X2 = zip(*X)
-        # yield prepare_batch(X1, X2, (np.asarray(y)-mu)/sigma)
-        yield prepare_batch(X1, X2, np.asarray(y))
+        # encoder
+        self.e1 = nn.Conv3d(nc, ndf, 5, 1, 1)
+        self.bn1 = nn.BatchNorm3d(ndf)
 
+        self.e2 = nn.Conv3d(ndf, ndf * 2, 3, 1, 1)
+        self.bn2 = nn.BatchNorm3d(ndf * 2)
 
-class CNN3D(nn.Module):     # Generator Code
+        self.e3 = nn.Conv3d(ndf * 2, ndf * 4, 3, 1, 1)
+        self.bn3 = nn.BatchNorm3d(ndf * 4)
 
-    def __init__(self):
-        super(CNN3D, self).__init__()
-        self.main = nn.Sequential(
-            # input is (nc) x 16 x 16 x 16
-            nn.Conv3d(nc, nenc, kernel_size=4, stride=2),
-            nn.LeakyReLU(0.2, inplace=True),
-            # input is (nenc) x 8 x 8 x 8
-            nn.Conv3d(nenc, nenc*2, kernel_size=4, stride=2),
-            nn.LeakyReLU(0.2, inplace=True),
-            # input is (nenc*2) x 4 x 4 x 4
-            nn.Conv3d(nenc*2, nenc*4, kernel_size=2, stride=2),
-            nn.LeakyReLU(0.2, inplace=True),
-            # nn.Conv3d(nenc*4, nenc*8, kernel_size=2, stride=2),
-            # nn.ReLU(inplace=True),
-            Flatten(),
-            nn.Linear(nenc*4, num_bins),
-        )
-        self.main.to(device)
+        self.e4 = nn.Conv3d(ndf * 4, ndf * 8, 3, 1, 1)
+        self.bn4 = nn.BatchNorm3d(ndf * 8)
 
-    def forward(self, input):
-        return self.main(input)
+        self.fc1 = nn.Linear(ndf * 8, latent_variable_size)
+        self.fc2 = nn.Linear(ndf * 8, latent_variable_size)
+
+        # aa classification
+        self.fc3 = nn.Linear(ndf * 8, 20)
+
+        ## DDG classification
+        self.fc4 = nn.Linear(ndf * 8, latent_variable_size)
+        self.fc5 = nn.Linear(latent_variable_size + 20 * 3, num_bins)
+
+        self.leakyrelu = nn.LeakyReLU(0.2, inplace=True)
+        self.mp = nn.MaxPool3d(2)
+
+    def encode(self, x):
+        h1 = self.mp(self.leakyrelu(self.bn1(self.e1(x))))
+        h2 = self.mp(self.leakyrelu(self.bn2(self.e2(h1))))
+        h3 = self.mp(self.leakyrelu(self.bn3(self.e3(h2))))
+        h4 = self.mp(self.leakyrelu(self.bn4(self.e4(h3))))
+        return h4.view(h4.size(0), -1)
+
+    def forward(self, x, w, m):
+        enc = self.encode(x)
+        aa = self.fc3(enc)
+        h = self.fc4(enc)
+        ddg = self.fc5(torch.cat([h, aa, w, m], 1))
+        return aa, torch.sigmoid(ddg)
 
 
 def pearsonr_torch(out, tgt):
-    bins_tensor = torch.tensor(bins, dtype=torch.float, device=device)
-    x = bins_tensor.gather(0, tgt)
-    y = bins_tensor.gather(0, torch.argmax(out, 1))
+    x = bins_tensor.gather(0, torch.argmax(tgt, 1))
+    y = bins_tensor.gather(0, torch.argmax(out > 0.5, 1))
     mean_x = torch.mean(x)
     mean_y = torch.mean(y)
     xm = x.sub(mean_x)
@@ -77,104 +85,109 @@ def pearsonr_torch(out, tgt):
     return r_val
 
 
-def get_loss(y_hat1, y_hat2, y1, y2, criterion=FocalLoss(gamma=2)):
+def get_loss(y_hat1, y_hat2, y1, y2, criterion=nn.BCELoss()):
     loss1 = criterion(y_hat1, y1)
     loss2 = criterion(y_hat2, y2)
     return loss1 + loss2
 
 
-def train(model, opt, adalr, batch_generator, length_xy, epoch):
+def preprocess_batch(records, start, end):
+    y1 = torch.tensor([bins > rec.ddg for rec in records[start:end]], dtype=torch.float, device=device)
+    y2 = torch.tensor([bins > -rec.ddg for rec in records[start:end]], dtype=torch.float, device=device)
+    vox1 = [load_single_position(rec.struct, rec.struct.get_residue(rec.mutations[0]), rad=16., reso=1.25)[1]
+            for rec in records[start:end]]
+    vox2 = [load_single_position(rec.mutant, rec.mutant.get_residue(rec.mutations[0]), rad=16., reso=1.25)[1]
+            for rec in records[start:end]]
+    w = torch.tensor([amino_acids.index(rec.mutations[0].w) for rec in records[start:end]], dtype=torch.long,
+                     device=device)
+    m = torch.tensor([amino_acids.index(rec.mutations[0].m) for rec in records[start:end]], dtype=torch.long,
+                     device=device)
+    w = torch.zeros([end - start, 20], dtype=torch.float, device=device).scatter_(1, w.unsqueeze(1), 1)
+    m = torch.zeros([end - start, 20], dtype=torch.float, device=device).scatter_(1, m.unsqueeze(1), 1)
+    x1 = torch.cat([v.unsqueeze(0) for v in vox1], 0)
+    x2 = torch.cat([v.unsqueeze(0) for v in vox2], 0)
+    return x1, x2, y1, y2, w, m
 
+
+def train(records, model, opt, batch_size):
     model.train()
-
-    pbar = tqdm(total=length_xy, desc="calculating...")
-
-    err, acc = 0., 0.
-
-    for i, (x1, x2, y1, y2) in enumerate(batch_generator):
-
-        x_drct = torch.cat([x1, x2], 1)
-        x_rvrs = torch.cat([x2, x1], 1)
+    pbar = tqdm(range(len(records)), desc="calculating...")
+    n_iter, err, acc = 1., 0., 0.
+    for ibatch in range(0, len(records), batch_size):
+        start = ibatch
+        end = min(batch_size + ibatch, len(records))
+        x1, x2, y1, y2, w, m = preprocess_batch(records, start, end)
         opt.zero_grad()
-        o = model(torch.cat([x_drct, x_rvrs], 0))
-        o1 = o[:len(x_drct), :]
-        o2 = o[len(x_drct):, :]
-        loss = get_loss(o1, o2, y1, y2)
-        pcor = pearsonr_torch(o1, y1)
-
-        n_iter = epoch*length_xy + i
-        writer.add_scalars('Siamese2/Loss', {"train": loss.item()}, n_iter)
-        writer.add_scalars('Siamese2/PCC', {"train": pcor.item()}, n_iter)
-
-        adalr.update(loss.item())
+        _, y_hat1 = model(x1, w, m)
+        _, y_hat2 = model(x2, m, w)
+        loss = get_loss(y_hat1, y_hat2, y1, y2)
+        pcor = pearsonr_torch(y_hat1, y1)
         err += loss.item()
         acc += pcor.item()
         loss.backward()
-        opt.step()
-        lr, e, a = adalr.lr, err/(i + 1), acc/(i + 1)
-        pbar.set_description("Training Loss:%.4f, Perasonr: %.4f, LR: %.4f" % (e, a, lr))
-        pbar.update(len(y1))
-
+        opt.step_and_update_lr(loss.item())
+        lr, e, a = opt.lr, err / n_iter, acc / n_iter
+        pbar.set_description("Training Loss:%.4f, Perasonr: %.4f, LR: %.5f" % (e, a, lr))
+        pbar.update(end-start)
+        n_iter += 1
     pbar.close()
 
 
-def evaluate(model, batch_generator, length_xy, n_iter):
+def evaluate(records, model, batch_size):
     model.eval()
-    pbar = tqdm(total=length_xy, desc="calculation...")
-    err, acc = 0., 0.
-    for i, (x1, x2, y1, y2) in enumerate(batch_generator):
+    pbar = tqdm(range(len(records)), desc="calculating...")
+    n_iter, err, acc = 1., 0., 0.
+    for ibatch in range(0, len(records), batch_size):
+        start = ibatch
+        end = min(batch_size + ibatch, len(records))
+        x1, x2, y1, y2, w, m = preprocess_batch(records, start, end)
 
-        x_drct = torch.cat([x1, x2], 1)
-        x_rvrs = torch.cat([x2, x1], 1)
-        o = model(torch.cat([x_drct, x_rvrs], 0))
-        o1 = o[:len(x_drct), :]
-        o2 = o[len(x_drct):, :]
-        loss = get_loss(o1, o2, y1, y2)
-        pcor = pearsonr_torch(o1, y1)
+        _, y_hat1 = model(x1, w, m)
+        _, y_hat2 = model(x2, m, w)
+        loss = get_loss(y_hat1, y_hat2, y1, y2)
+        pcor = pearsonr_torch(y_hat1, y1)
         err += loss.item()
         acc += pcor.item()
-        e, a = err/(i + 1), acc/(i + 1)
-        pbar.set_description("Validation Loss:%.4f, Perasonr: %.4f" % (e, a))
-        pbar.update(len(y1))
-
-    writer.add_scalars('Siamese2/Loss', {"valid": e}, n_iter)
-    writer.add_scalars('Siamese2/PCC', {"valid": a}, n_iter)
+        lr, e, a = opt.lr, err / n_iter,  acc / n_iter
+        pbar.set_description("Validation Loss:%.4f, Perasonr: %.4f, LR: %.5f" % (e, a, lr))
+        pbar.update(end-start)
+        n_iter += 1
     pbar.close()
-    return e, pcor
-
-
-def add_arguments(parser):
-    parser.add_argument("--mongo_url", type=str, default='mongodb://rack-jonathan-g04:27017', help="Supply the URL of MongoDB")
+    return err/n_iter
 
 
 if __name__ == "__main__":
-    import argparse
-    from pymongo import MongoClient
 
-    parser = argparse.ArgumentParser()
-    add_arguments(parser)
-    args = parser.parse_args()
-    client = MongoClient(args.mongo_url)
+    net = Conv1(nc=24, ngf=64, ndf=64, latent_variable_size=256)
+    checkpoint = torch.load('../models/beast_1.45872.tar', map_location=lambda storage, loc: storage)
+    load_checkpoint(net, checkpoint)
+    net.to(device)
 
-    records_trn, records_tst = load_records(ratio_train_test=0.8)
-    cache_trn = Cache(client['skempi']['siamese2_train'], serialize=serialize, deserialize=deserialize)
-    cache_val = Cache(client['skempi']['siamese2_valid'], serialize=serialize, deserialize=deserialize)
-    dataset_trn = SiameseDataset(records_trn, cache_trn)
-    dataset_tst = SiameseDataset(records_tst, cache_val)
+    dfs_freeze(net.bn1)
+    dfs_freeze(net.bn2)
+    dfs_freeze(net.bn3)
+    dfs_freeze(net.bn4)
+    dfs_freeze(net.e1)
+    dfs_freeze(net.e2)
+    dfs_freeze(net.e3)
+    dfs_freeze(net.e4)
+    dfs_freeze(net.fc1)
+    dfs_freeze(net.fc2)
+    dfs_freeze(net.fc3)
 
-    net = CNN3D()
-    opt = optim.SGD(net.parameters(), lr=LR, momentum=0.9, nesterov=True)
-    adalr = AdaptiveLR(opt, LR, num_iterations=200)
+    lim = 500 if DEBUG else None
+    varib = load_protherm(varib_df[:lim], PROTHERM_PDBs, True, 0)
+    s2648 = load_protherm(s2648_df[:lim], PROTHERM_PDBs, True, 0)
+    data = varib + s2648
 
-    num_epochs = 20
-    init_epoch = 0
-    for epoch in range(init_epoch, num_epochs):
+    r = int(len(data) * 0.8)
+    data = np.random.permutation(data)
+    training, validation = data[:r], data[r:]
 
-        train(net, opt, adalr, batch_generator(dataset_trn), len(dataset_trn), epoch)
+    opt = ScheduledOptimizer(optim.Adam(net.parameters(), lr=LR), LR, num_iterations=100)
 
-        loss, _ = evaluate(net, batch_generator(dataset_tst), len(dataset_tst), (epoch+1)*len(dataset_trn))
-
-        print("[Epoch %d/%d] (Validation Loss: %.4f" % (epoch + 1, num_epochs, loss))
-
-        dataset_trn.reset()
-        dataset_tst.reset()
+    num_epochs = 50
+    for epoch in range(num_epochs):
+        train(training, net, opt, batch_size=BATCH_SIZE)
+        loss = evaluate(validation, net, batch_size=BATCH_SIZE)
+        print("[Epoch %d/%d] Validation Loss: %.4f" % (epoch + 1, num_epochs, loss))

@@ -221,6 +221,7 @@ class Residue(object):
 class Chain(object):
 
     def __init__(self, pdb, chain_id, residues=[]):
+        self.index = {res.num: i for i, res in enumerate(residues)}
         self.residues = residues
         self.chain_id = chain_id
         self.pdb = pdb

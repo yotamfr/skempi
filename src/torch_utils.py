@@ -20,7 +20,7 @@ class Flatten(nn.Module):
 
 class UnFlatten(nn.Module):
     def forward(self, input, size=1024):
-        return input.view(input.size(0), size, 1, 1)
+        return input.view(input.size(0), size, 1, 1, 1)
 
 
 class FocalLoss(nn.Module):
@@ -34,21 +34,21 @@ class FocalLoss(nn.Module):
             self.alpha = torch.tensor(alpha, dtype=torch.float, device=device)
         self.size_average = size_average
 
-    def forward(self, input, target):
-        if input.dim() > 2:
-            input = input.view(input.size(0), input.size(1), -1)  # N,C,H,W => N,C,H*W
-            input = input.transpose(1, 2)                           # N,C,H*W => N,H*W,C
-            input = input.contiguous().view(-1, input.size(2))   # N,H*W,C => N*H*W,C
+    def forward(self, logits, target):
+        if logits.dim() > 2:
+            logits = logits.view(logits.size(0), logits.size(1), -1)  # N,C,H,W => N,C,H*W
+            logits = logits.transpose(1, 2)                           # N,C,H*W => N,H*W,C
+            logits = logits.contiguous().view(-1, logits.size(2))   # N,H*W,C => N*H*W,C
         target = target.view(-1, 1)
 
-        logpt = F.log_softmax(input, 1)
+        logpt = F.log_softmax(logits, 1)
         logpt = logpt.gather(1, target)
         logpt = logpt.view(-1)
         pt = torch.exp(logpt)
 
         if self.alpha is not None:
-            if self.alpha.type() != input.data.type():
-                self.alpha = self.alpha.type_as(input.data)
+            if self.alpha.type() != logits.data.type():
+                self.alpha = self.alpha.type_as(logits.data)
             at = self.alpha.gather(0, target.data.view(-1))
             logpt = logpt * at
 
@@ -65,6 +65,15 @@ def model_summary(model):
 def save_checkpoint(state, loss, prefix, ckptpath):
     filename_late = os.path.join(ckptpath, "%s_%.5f.tar" % (prefix, loss))
     torch.save(state, filename_late)
+
+
+def load_checkpoint(net, checkpoint):
+    loaded_weights = checkpoint['net']
+    weight_dic = {}
+    net_state_dic = net.state_dict()
+    for count, (key, _) in enumerate(net_state_dic.items()):
+        weight_dic[key] = loaded_weights.get(key, net_state_dic[key])
+    net.load_state_dict(weight_dic)
 
 
 def adjust_learning_rate(initial, optimizer, epoch, factor=0.1):
@@ -86,17 +95,21 @@ def optimizer_cuda(optimizer):
                 state[k] = v.cuda()
 
 
-class AdaptiveLR(object):
+class ScheduledOptimizer(object):
 
     def __init__(self, opt, initial_lr, num_iterations=1000):
         self._lr = initial_lr
         self.opt = opt
         self.losses = []
         self.window = num_iterations
-        self.min_lr = 1e-4
+        self.min_lr = 1e-5
         self.factor = 0.5
 
-    def update(self, loss):
+    def zero_grad(self):
+        self.opt.zero_grad()
+
+    def step_and_update_lr(self, loss):
+        self.opt.step()
         losses = self.losses
         while len(losses) > self.window:
             losses.pop(0)
@@ -118,6 +131,12 @@ class AdaptiveLR(object):
     def lr(self, val):
         set_learning_rate(val, self.opt)
         self._lr = val
+
+    def load_state_dict(self, dic):
+        self.opt.load_state_dict(dic)
+
+    def state_dict(self):
+        return self.opt.state_dict()
 
 
 def shuffle(data, labels):
