@@ -3,10 +3,12 @@ import numpy as np
 
 from stride import *
 from skempi_lib import *
-from pytorch_utils import *
+from torch_utils import *
 
 np.seterr("raise")
 
+
+EPS = 1e-6
 REPO_PATH = osp.join('..', '3DCNN_data', 'pdbs.zip')
 TRAINING_SET_PATH = osp.join('..', '3DCNN_data', "train_pdbs")
 VALIDATION_SET_PATH = osp.join('..', '3DCNN_data', "valid_pdbs")
@@ -36,7 +38,7 @@ def ref_mat(ca, c, n):
     return A
 
 
-def voxelize(xyz, channel, temp, rad, reso, num_channels=25, compute_distance_from_voxel_centers=True):
+def voxelize(xyz, channel, temp, rad, reso, num_channels=24, compute_distance_from_voxel_centers=True):
     n = int(2.0 * rad / reso) + 1
     voxels = torch.zeros((num_channels, n, n, n), device=device)
     shifted_xyz = xyz / reso + n / 2.0
@@ -52,7 +54,7 @@ def voxelize(xyz, channel, temp, rad, reso, num_channels=25, compute_distance_fr
     else:
         voxels[channel[:, 0], indices[:, 0], indices[:, 1], indices[:, 2]] += 1
         voxels[channel[:, 1], indices[:, 0], indices[:, 1], indices[:, 2]] += 1
-    voxels[num_channels-1, indices[:, 0], indices[:, 1], indices[:, 2]] += temp.squeeze(1)
+    # voxels[num_channels-1, indices[:, 0], indices[:, 1], indices[:, 2]] += temp.squeeze(1)
     return voxels
 
 
@@ -70,14 +72,14 @@ def _preprocess_atoms_and_residues(atoms, residues, rad, epsilon=0.0):
                        dtype=torch.float, device=device) for res in residues]
     T0 = [torch.tensor([get_channels(atm) for atm in filter_atoms(res.atoms)],
                        dtype=torch.long, device=device) for res in residues]
-    Y0 = [torch.tensor([[np.log(atm.temp)] for atm in filter_atoms(res.atoms)],
+    Y0 = [torch.tensor([[np.log(max(atm.temp, EPS))] for atm in filter_atoms(res.atoms)],
                        dtype=torch.float, device=device) for res in residues]
 
     X = torch.tensor([atm.coord for atm in atoms],
                      dtype=torch.float, device=device).unsqueeze(0).repeat(len(residues), 1, 1)
     T = torch.tensor([get_channels(atm) for atm in atoms],
                      dtype=torch.long, device=device).unsqueeze(0).repeat(len(residues), 1, 1)
-    Y = torch.tensor([[np.log(atm.temp)] for atm in atoms],
+    Y = torch.tensor([[np.log(max(atm.temp, EPS))] for atm in atoms],
                      dtype=torch.float, device=device).unsqueeze(0).repeat(len(residues), 1, 1)
 
     X = torch.bmm(R, (X - t).transpose(1, 2)).transpose(1, 2)
@@ -96,47 +98,76 @@ def filter_residues(residues):
 
 
 def filter_atoms(atoms):
-    return [atm for atm in atoms if (atm.type in CNOS) and (atm.res.name in amino_acids) and (atm.temp > 0)]
+    # return [atm for atm in atoms if (atm.type in CNOS) and (atm.res.name in amino_acids) and (atm.temp > 0)]
+    return [atm for atm in atoms if (atm.type in CNOS) and (atm.res.name in amino_acids)]
 
 
-def pdb_loader(repo, list_of_pdbs, n_iter, rad=16., reso=1.25):
+def load_single_position(st, res, rad=16., reso=1.25):
+    atoms, residues = filter_atoms(st.atoms), filter_residues(st.residues)
+    X, X0, Y, Y0, T, T0, R, t, ix = _preprocess_atoms_and_residues(atoms, [res], rad)
+    resi = 0
+    x0 = torch.mm(R[resi, :, :], (X0[resi] - t[resi]).transpose(0, 1)).transpose(0, 1)
+    y = voxelize(X[resi, ix[resi], :], T[resi, ix[resi], :], Y[resi, ix[resi], :], rad, reso)
+    x = voxelize(x0, T0[resi], Y0[resi], rad, reso)
+    aa = amino_acids.index(res.name)
+    return aa, (y - x), y
+
+
+def pdb_loader(repo, list_of_pdbs, n_iter, rad=16., reso=1.25, sample_ratio=0.1, handle_error=None):
     i_iter, i_pdb = 0, 0
     p = np.random.permutation(len(list_of_pdbs))
     while i_iter < n_iter:
         pdb = list_of_pdbs[p[i_pdb]]
-        st = parse_pdb(pdb, StringIO(repo.read("pdbs/%s.pdb" % pdb)))
+        i_pdb = (i_pdb + 1) % len(list_of_pdbs)
+        try:
+            st = parse_pdb(pdb, StringIO(repo.read("pdbs/%s.pdb" % pdb)))
+        except KeyError:
+            continue
         atoms, residues = filter_atoms(st.atoms), filter_residues(st.residues)
+        if len(residues) == 0:
+            continue
+        m = int(len(residues) * sample_ratio)
+        residues = np.random.choice(residues, m, replace=False)
+
         try:
             X, X0, Y, Y0, T, T0, R, t, ix = _preprocess_atoms_and_residues(atoms, residues, rad)
-        except RuntimeError:
+        except RuntimeError as e:
+            if handle_error:
+                handle_error(pdb, e)
             continue
-        finally:
-            i_pdb = (i_pdb + 1) % len(list_of_pdbs)
 
-        for pi in np.random.permutation(len(residues)):
-            resi, res = pi, residues[pi]
-            try:
-                x0 = torch.mm(R[resi, :, :], (X0[resi] - t[resi]).transpose(0, 1)).transpose(0, 1)
-            except RuntimeError:
-                continue
-            y = voxelize(X[resi, ix[resi], :], T[resi, ix[resi], :], Y[resi, ix[resi], :], rad, reso)
-            x = voxelize(x0, T0[resi], Y0[resi], rad, reso)
-            yield y - x, y
-            i_iter += 1
+        for resi, res in enumerate(residues):
             if i_iter == n_iter:
                 break
+            try:
+                x0 = torch.mm(R[resi, :, :], (X0[resi] - t[resi]).transpose(0, 1)).transpose(0, 1)
+                y = voxelize(X[resi, ix[resi], :], T[resi, ix[resi], :], Y[resi, ix[resi], :], rad, reso)
+                x = voxelize(x0, T0[resi], Y0[resi], rad, reso)
+                aa = amino_acids.index(res.name)
+            except RuntimeError as e:
+                if handle_error:
+                    handle_error(pdb, e)
+                continue
+
+            i_iter += 1
+            yield aa, y - x, y
 
 
 def batch_generator(loader, batch_size=32):
     def prepare_batch(data):
-        x, y = zip(*data)
-        return torch.stack(x, 0), torch.stack(y, 0)
+        a, x, y = zip(*data)
+        x = torch.stack(x, 0)
+        y = torch.stack(y, 0)
+        a = torch.tensor(a, dtype=torch.long, device=device)
+        return a, x, y
+
     batch = []
     for inp in loader:
         if len(batch) == batch_size:
             yield prepare_batch(batch)
             batch = []
         batch.append(inp)
+    yield prepare_batch(batch)
 
 
 if __name__ == "__main__":

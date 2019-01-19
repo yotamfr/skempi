@@ -7,8 +7,6 @@ from torch_utils import *
 from skempi_lib import *
 from loader import *
 
-os.environ["CUDA_VISIBLE_DEVICES"] = '0'
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 num_bins = 301
 DDG = np.asarray(s2648_df.DDG.values.tolist() + varib_df.DDG.values.tolist())
 Min, Max = min(min(DDG), min(-DDG)), max(max(DDG), max(-DDG))

@@ -7,8 +7,6 @@ from torch_utils import *
 from skempi_lib import *
 from loader import *
 
-os.environ["CUDA_VISIBLE_DEVICES"] = '0'
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 num_bins = 301
 DDG = np.asarray(s2648_df.DDG.values.tolist() + varib_df.DDG.values.tolist())
 Min, Max = min(min(DDG), min(-DDG)), max(max(DDG), max(-DDG))
@@ -186,7 +184,7 @@ if __name__ == "__main__":
 
     opt = ScheduledOptimizer(optim.Adam(net.parameters(), lr=LR), LR, num_iterations=100)
 
-    num_epochs = 20
+    num_epochs = 30
     for epoch in range(num_epochs):
         train(training, net, opt, batch_size=BATCH_SIZE)
         loss = evaluate(validation, net, batch_size=BATCH_SIZE)
