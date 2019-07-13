@@ -124,7 +124,6 @@ class PdbReader(object):
         return self.struct._chains[self._ix_chain]
 
     def read(self):
-
         if self._ix_res + self._step < len(self.curr_chain):
             self._ix_res += self._step
         elif self._ix_chain + 1 < len(self.struct._chains):

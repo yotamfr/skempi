@@ -147,35 +147,9 @@ def run_cross_dataset_test(dataset1, dataset2, model, name):
     return cor_trn, cor_tst, mse_trn, mse_tst
 
 
-def plot_bar_charts_with_confidence_interval(df1, df2, title1, title2):
+def plot_bar_charts_with_confidence_interval(dataframes, titles):
     import numpy as np
     import matplotlib.pyplot as plt
-
-    reasons = df1.columns.tolist()
-    N = len(reasons)
-    pcc_means = df1.mean()
-    pcc_stds = df1.std()
-
-    ind = np.arange(N)  # the x locations for the groups
-    width = 0.35  # the width of the bars
-
-    fig, ax = plt.subplots()
-    ax.figure.set_size_inches(8, 6)
-    rects1 = ax.bar(ind, pcc_means, width, color='r',
-                    yerr=pcc_stds if len(pcc_stds) > 0 else None)
-
-    rmse_means = df2.mean()
-    rmse_stds = df2.std()
-    rects2 = ax.bar(ind + width, rmse_means, width, color='y',
-                    yerr=pcc_stds if len(rmse_stds) > 0 else None)
-
-    # add some text for labels, title and axes ticks
-    ax.set_ylabel('Scores')
-    ax.set_title('%s-%s' % (title1, title2))
-    ax.set_xticks(ind + width / 2)
-    ax.set_xticklabels(reasons, rotation=0)
-
-    ax.legend((rects1[0], rects2[0]), (title1, title2))
 
     def autolabel(rects):
         for rect in rects:
@@ -183,8 +157,30 @@ def plot_bar_charts_with_confidence_interval(df1, df2, title1, title2):
             ax.text(rect.get_x() + rect.get_width() / 2., 1.05 * height,
                     '%.2f' % height, ha='center', va='bottom')
 
-    autolabel(rects1)
-    autolabel(rects2)
+    fig, axarr = plt.subplots(1, len(dataframes))
+    for i in range(len(dataframes)):
+        ax = axarr[i]
+        df = dataframes[i]
+        reasons = df.columns.tolist()
+        N = len(reasons)
+        ind = np.arange(N)  # the x locations for the groups
+        width = 0.35  # the width of the bars
+
+        means = df.mean()
+        stds = df.std()
+
+        ax.figure.set_size_inches(4 * len(dataframes), 4)
+        rects = ax.bar(ind, means, width, color='r',
+                       yerr=stds if len(stds) > 0 else None)
+
+        # add some text for labels, title and axes ticks
+        ax.set_ylabel('Scores')
+        ax.set_xticks(ind)
+        ax.set_xticklabels(reasons, rotation=0)
+
+        ax.legend(rects, [titles[i]])
+        autolabel(rects)
+
     plt.tight_layout()
 
 

@@ -30,12 +30,12 @@ prefix_blast = "/usr/bin"
 # hhblits_dbname = "scop95"
 hhblits_dbname = "uniprot20_2016_02"
 # hhblits_dbname = "uniclust30_2017_10"
-batch_size = 2
-num_cpu = 2
+batch_size = 4
+num_cpu = 4
 max_filter = 20000
 coverage = 0.0
 mact = 0.9
-
+keep_files = True
 GAP = '-'
 NOW = datetime.utcnow()
 IGNORE = [aa for aa in map(str.lower, AA.aa2index.keys())] + [GAP]  # ignore deletions + insertions
@@ -95,7 +95,7 @@ def _set_unique_ids(input_file, output_file):
                 fout.write(line)
 
 
-def _run_hhblits_batched(sequences, collection):
+def _run_hhblits_batched(sequences, collection=None):
 
     records = [SeqRecord(Seq(seq), seqid) for (seqid, seq) in sequences]
     pbar = tqdm(range(len(records)), desc="sequences processed")
@@ -117,7 +117,7 @@ def _run_hhblits_batched(sequences, collection):
         cline = "%s/scripts/splitfasta.pl %s 1>/dev/null 2>&1" % (prefix_hhsuite, sequences_fasta)
         assert os.WEXITSTATUS(os.system(cline)) == 0
 
-        hhblits_cmd = "/usr/bin/hhblits -i $file -d ../dbs/%s/%s -opsi $name.aln -n 2" \
+        hhblits_cmd = "/usr/bin/hhblits -i $file -d ../../dbs/%s/%s -opsi $name.aln -n 2" \
                       % (hhblits_dbname, hhblits_dbname)
 
         cline = "%s/scripts/multithread.pl \'*.seq\' \'%s\' -cpu %d 1>/dev/null 2>&1" \
@@ -134,7 +134,7 @@ def _run_hhblits_batched(sequences, collection):
 
         suffix = 'fil' if coverage > 0 else 'aln'
 
-        if output_fasta:
+        if keep_files:
             reformat_cmd = "%s/scripts/reformat.pl -r psi fas $file $name.fas" % prefix_hhsuite
             cline = "%s/scripts/multithread.pl \'*.%s\' \'%s\' -cpu %d 1>/dev/null 2>&1" \
                     % (prefix_hhsuite, suffix, reformat_cmd, num_cpu)
@@ -142,15 +142,16 @@ def _run_hhblits_batched(sequences, collection):
 
         e = ThreadPoolExecutor(num_cpu)
         for (seq, msa) in e.map(_get_msa, [seq for seq in batch if os.path.exists("%s.aln" % seq.id)]):
-            collection.update_one({
-                "_id": seq.id}, {
-                '$set': {"aln": msa,
-                         "seq": str(seq.seq),
-                         "length": len(seq.seq),
-                         "updated_at": datetime.utcnow()}
-            }, upsert=True)
+            if collection:
+                collection.update_one({
+                    "_id": seq.id}, {
+                    '$set': {"aln": msa,
+                             "seq": str(seq.seq),
+                             "length": len(seq.seq),
+                             "updated_at": datetime.utcnow()}
+                }, upsert=True)
 
-        if cleanup: os.system("rm ./*")
+        if not keep_files: os.system("rm ./*")
 
         os.chdir(pwd)
 
@@ -160,7 +161,7 @@ def _run_hhblits_batched(sequences, collection):
 def _get_profile_func(method="pssm"):
     func = _get_pssm if method == "pssm" else _get_profile
 
-    def _comp_profile_batched(sequences, collection):
+    def _comp_profile_batched(sequences, collection=None):
 
         records = [SeqRecord(Seq(seq), seqid) for (seqid, seq) in sequences]
         pbar = tqdm(range(len(records)), desc="sequences processed")
@@ -183,13 +184,14 @@ def _get_profile_func(method="pssm"):
                 pd.DataFrame({k: [dic[k] for dic in prof] for k in prof[0]})\
                     .to_csv("./%s.prof" % seq.id, index=False)
 
-                collection.update_one({
-                    "_id": seq.id}, {
-                    '$set': {method: prof,
-                             "seq": str(seq.seq),
-                             "length": len(seq.seq),
-                             "updated_at": datetime.utcnow()}
-                }, upsert=True)
+                if collection:
+                    collection.update_one({
+                        "_id": seq.id}, {
+                        '$set': {method: prof,
+                                 "seq": str(seq.seq),
+                                 "length": len(seq.seq),
+                                 "updated_at": datetime.utcnow()}
+                    }, upsert=True)
 
             os.chdir(pwd)
 
@@ -218,11 +220,8 @@ def _get_msa(seq):
 
 
 def _get_pssm(seq):
+    _, aln = _get_msa(seq)
 
-    doc = db.skempi.find_one({"_id": seq.id})
-    if not doc or not "aln" in doc:
-        return None, None
-    aln = doc["aln"]
     lines = [' '.join([uid, homo]) for uid, homo in aln]
     with open("%s.msa" % seq.id, 'w+') as f:
         f.writelines(lines)
@@ -239,12 +238,7 @@ def _get_pssm(seq):
 
 
 def _get_profile(seq):
-
-    doc = db.skempi.find_one({"_id": seq.id})
-
-    if not doc or not "aln" in doc:
-        return None, None
-    aln = doc["aln"]
+    _, aln = _get_msa(seq)
 
     profile = []
     for pos in range(len(seq)):
@@ -310,6 +304,9 @@ def add_arguments(parser):
                         help="The name of the DB to which to write the data.")
 
 
+run_hhblits = _run_hhblits_batched
+comp_profiles = _get_profile_func('profile')
+
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
@@ -327,8 +324,7 @@ if __name__ == "__main__":
     prefix_blast = args.prefix_blast
     prefix_hhsuite = args.prefix_hhsuite
 
-    cleanup = not args.keep_files
-    output_fasta = args.keep_files
+    keep_files = args.keep_files
 
     os.environ['HHLIB'] = prefix_hhsuite
 

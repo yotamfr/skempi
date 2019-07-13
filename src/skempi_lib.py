@@ -13,6 +13,7 @@ from pdb_utils import *
 from grid_utils import *
 from skempi_consts import *
 from hhblits import *
+from bindprofx import foldx4
 
 
 class MSA(object):
@@ -205,9 +206,8 @@ class SkempiRecord(object):
         return get_features(st, self.mutations).values()
 
     def __reversed__(self):
-        ddg_arr = [-v for v in self.ddg_arr]
         muts = [reversed(mut) for mut in self.mutations]
-        record = SkempiRecord(self.mutant, muts, ddg_arr, load_mutant=False)
+        record = SkempiRecord(self.mutant, muts, [-v for v in self.ddg_arr], load_mutant=False)
         record.reverse = not self.reverse
         record.mutant = self.struct
         return record
@@ -270,23 +270,6 @@ def parse_mutations(mutations_str, reverse=False, sep=','):
     else:
         return mutations
 
-# class DDGMapper(object):
-#
-#     def __init__(self, records):
-#         from sklearn.linear_model import LinearRegression
-#         self._dic = {r: r.ddg for r in records}
-#         self._model = LinearRegression()
-#         X = np.asarray([r.features for r in records])
-#         y = np.asarray([r.ddg for r in records])
-#         self._model.fit(X, y)
-#
-#     def __call__(self, r):
-#             return np.asarray([self._dic[r]]) if r in self._dic else self._model.predict([r.features])
-
-
-def contact_map(struct, chain_id, posi):
-    pass
-
 
 def comp_cp_in_shell(mut, struct, mat, inner, outer):
     res = struct[mut.chain_id][mut.i]
@@ -327,8 +310,6 @@ def get_counts(mutations):
         total += 1.0
         ret[AAA_dict[mut.w]] += 1.0
         ret[AAA_dict[mut.m]] -= 1.0
-    # for key in ret.keys():
-    #     ret[key] /= total
     return ret
 
 
@@ -445,9 +426,7 @@ def get_neural_features(struct, mutations):
     feats["IntAct"] = [get_interactions(struct, mut) for mut in mutations]
     feats["Pos"] = [[amino_acids.index(mut.w) + 1] for mut in mutations]
     feats["Mut"] = [[amino_acids.index(mut.m) + 1] for mut in mutations]
-    feats["Acc"] = [ac_ratio(struct, mut.chain_id, mut.i) for mut in mutations]
     feats["Prof"] = [[struct.get_profile(mut.chain_id)[(mut.i, aa)] for aa in amino_acids] for mut in mutations]
-    # feats["Cons"]
     return feats
 
 
@@ -478,7 +457,7 @@ class Interaction(object):
 
     @staticmethod
     def pad():
-        return [0, 0, 0, 0, 0, 0, 0, 0.0, 0.0, 0.0, 0.0]
+        return [0, 0, 0, 0, 0, 0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
     @property
     def dist(self):
@@ -501,7 +480,12 @@ class Interaction(object):
         pr_mut = self.struct.get_profile(self.mut.chain_id)[(self.mut.i, self.mut.m)]
         pr1 = self.struct.get_profile(a.chain_id)[(a.res.index, b.res.name)]
         pr2 = self.struct.get_profile(b.chain_id)[(b.res.index, a.res.name)]
-        return [amino_acids.index(self.mut.m) + 1, aa1, aa2, at1, at2, ap1, ap2, self.dist, pr1, pr2, pr_mut]
+        ac11 = self.struct.get_acc1(a.chain_id, a.res.index)
+        ac12 = self.struct.get_acc1(b.chain_id, b.res.index)
+        ac21 = self.struct.get_acc2(a.chain_id, a.res.index)
+        ac22 = self.struct.get_acc2(b.chain_id, b.res.index)
+        return [amino_acids.index(self.mut.m) + 1, aa1, aa2, at1, at2, ap1, ap2,
+                self.dist, pr1, pr2, pr_mut, ac11, ac12, ac21, ac22]
 
     def __str__(self):
         a, b = self.atom_a, self.atom_b
@@ -517,30 +501,28 @@ def get_interactions(struct, mut, rad=4.0, ignore_list=BACKBONE_ATOMS):
     envs = [dist(X, [a.coord for a in rr.atoms]) for rr in residues]
     indices = [np.unravel_index(np.argmin(e, axis=None), e.shape) for e in envs]
     interactions = [Interaction(struct, mut, center_res[i], residues[k][j], envs[k][i, j]) for k, (i, j) in enumerate(indices)]
-    filtered_interactions = [ii for ii in interactions if ii.atom_a.name not in ignore_list]
-    # if len([str(i) for i in interactions if 1.8 <= i.dist <= 2.2]):
-    # print(str(interactions[0].atom_a.res.chain), str(interactions[0].atom_a))
-    # print(len(filtered_interactions), [str(i) for i in filtered_interactions])
+    filtered_interactions = sorted([ii for ii in interactions if ii.atom_a.name not in ignore_list], key=lambda x: x.dist)
     return filtered_interactions
 
 
 class Dataset(object):
 
-    def __init__(self, records):
-        self.records = np.asarray(records)
-        self.init()
+    def __init__(self, records, foldx4=foldx4):
+        self.records = records
+        self.X = np.asarray([[foldx4(rec)] + rec.features for rec in self.records], dtype=np.float64)
+        self.df = pd.DataFrame([rec.ddg for rec in records], columns=["DDG"])
+        self.df["Mutation"] = [','.join([str(m) for m in r.mutations]) for r in self.records]
+        self.df["Protein"] = [r.struct.protein for r in self.records]
+        self.df["Num_Muts"] = [len(r.mutations) for r in self.records]
+        self.df["Num_Chains"] = [r.struct.num_chains for r in self.records]
 
-    def init(self):
-        records = self.records
-        self.X = np.asarray([r.features for r in records])
-        self.df = pd.DataFrame([r.ddg for r in records], columns=["DDG"])
-        self.df["Mutation"] = [','.join([str(m) for m in r.mutations]) for r in records]
-        self.df["Protein"] = [r.struct.protein for r in records]
-        self.df["Num_Muts"] = [len(r.mutations) for r in records]
-        self.df["Num_Chains"] = [r.struct.num_chains for r in records]
+    def extend(self, dataset2):
+        self.df = pd.concat([self.df, dataset2.df])
+        self.X = np.concatenate([self.X, dataset2.X])
+        self.records.extend(dataset2.records)
 
     def __reversed__(self):
-        return Dataset([reversed(r) for r in self.records])
+        return Dataset([reversed(rec) for rec in self.records])
 
     @property
     def shape(self):
@@ -587,7 +569,7 @@ def protherm_generator(dataframe, path_to_pdbs, load_mut=True, min_seq_length=0)
         key = (row.PDB, row.Mut)
         if key not in records:
             records[key] = [st]
-        records[key].append([row.DDG])
+        records[key].append(row.DDG)
     prepare_alignment_profiles(structs.values())
     structs = {}
     for (_, ms), v in tqdm(records.items(), "loading records"):
@@ -634,7 +616,7 @@ def skempi_generator(dataframe, path_to_pdbs, load_mut=True, min_seq_length=0):
         key = (t, row["Mutation(s)_cleaned"])
         if key not in records:
             records[key] = [st]
-        records[key].append([row.DDG])
+        records[key].append(row.DDG)
     prepare_alignment_profiles(structs.values())
     structs = {}
     for k, v in tqdm(records.items(), "loading records"):
