@@ -171,5 +171,5 @@ def batch_generator(loader, batch_size=32):
 
 
 if __name__ == "__main__":
-    for x, y in batch_generator(pdb_loader(PDB_ZIP, TRAINING_SET, 1000)):
+    for a, x, y in batch_generator(pdb_loader(PDB_ZIP, TRAINING_SET, 1000)):
         assert x.size() == y.size()

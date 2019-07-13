@@ -128,7 +128,8 @@ if __name__ == "__main__":
     from tqdm import tqdm
     from time import sleep
     lim = None
-    records = load_skempi(skempi_df_v2[:lim], SKMEPI2_PDBs, False, 0)
+    records = load_skempi(skempi_df_v2[:lim], SKMEPI2_PDBs, True, 0)
+    records = [reversed(r) for r in records]
     tasks = [E.submit(foldx4, r) for r in records]
     pbar, f4x = tqdm(total=len(records), desc="records processed"), {}
     stop = False
@@ -146,6 +147,5 @@ if __name__ == "__main__":
     df = pd.DataFrame({"Protein": [r.struct.protein for r in records],
                        "FoldX4": [f4x[r] for r in records],
                        "DDG": [r.ddg for r in records],
-                       "Mutation(s)_cleaned": [','.join([str(m) for m in r.mutations])
-                                               for r in records]})
-    df.to_csv("../data/skempi_v2_fold_x4.tsv", sep='\t', index=False)
+                       "Mutation(s)_cleaned": [','.join([str(m) for m in r.mutations]) for r in records]})
+    df.to_csv("../data/skempi_v2_fold_x4_reversed.tsv", sep='\t', index=False)

@@ -4,13 +4,17 @@ from pyobb.obb import OBB
 from functools import reduce
 from scipy.linalg import expm, norm
 from scipy.ndimage.filters import gaussian_filter
+from scipy.linalg import get_blas_funcs
 
 from pdb_utils import *
+from pytorch_utils import *
 from aaindex import *
 
 VDW = {'C': 1.7, 'O': 1.52, 'N': 1.55, 'S': 1.8}
 
-CNOS = ["C", "N", "O", "S"]
+CNOS = "CNOS"
+
+CHET = "CHET"
 
 MAX_DISTANCE_CUTOFF = 15.0
 
@@ -30,37 +34,58 @@ def get_center_and_rotation(residues):
         return obb.centroid, obb.rotation
 
 
-def get_voxel_channels_of_atoms(atoms, center, rot, rad=10.0, reso=1.0):
-    atoms = select_atoms_in_sphere(atoms, center, rad*1.5)
-    atm_channels = [get_voxels_around_center(
-        atoms, center, rot, lambda x: x.type == t, lambda x: default, rad=rad, reso=reso) for t in 'CNOS']
-    # res_channels = [get_voxels_around_center(
-    #     atoms, center, rot, lambda x: x.res.name == aa, lambda x: default, rad=rad, reso=reso) for aa in amino_acids]
-    c5 = get_voxels_around_center(atoms, center, rot, lambda x: True, lambda x: x.res.consv, rad=rad, reso=reso)
-    c6 = get_voxels_around_center(atoms, center, rot, lambda x: True, lambda x: x.res.acc1, rad=rad, reso=reso)
-    # c7 = get_voxels_around_center(atoms, center, rot, lambda x: True, lambda x: x.res.acc2, rad=rad, reso=reso)
-    # c8 = get_voxels_around_center(atoms, center, rot, lambda x: True, lambda x: x.temp, rad=rad, reso=reso)
-    return np.stack(atm_channels + [c5, c6], axis=0)
+def get_pdb_voxel_channels(atoms, center, rot, rad=10.0, reso=1.0):
+    atoms, X = select_atoms_in_box(atoms, center, rot, rad)
+    temp = get_voxel_channel(atoms, X, lambda x: True, lambda x: x.temp, rad=rad, reso=reso)
+    atm_channels = [get_voxel_channel(atoms, X, lambda x: x.type == t, lambda x: default, rad=rad, reso=reso) for t in 'CNOS']
+    res_channels = [get_voxel_channel(atoms, X, lambda x: x.res.name == aa, lambda x: default, rad=rad, reso=reso) for aa in amino_acids]
+    ss_channels = [get_voxel_channel(atoms, X, lambda x: x.res.ss == t, lambda x: default, rad=rad, reso=reso) for t in 'CHET']
+    return np.stack(atm_channels + [temp] + res_channels + ss_channels, axis=0)
+
+
+def get_skempi_voxel_channels(atoms, center, rot, rad=10.0, reso=1.0):
+    atoms, X = select_atoms_in_box(atoms, center, rot, rad)
+    atm_channels = [get_voxel_channel(atoms, X, lambda x: x.type == t, lambda x: default, rad=rad, reso=reso) for t in 'CNOS']
+    # res_channels = [get_voxel_channel(atoms, X, lambda x: x.res.name == aa, lambda x: default, rad=rad, reso=reso) for aa in amino_acids]
+    c5 = get_voxel_channel(atoms, X, lambda x: True, lambda x: x.res.consv, rad=rad, reso=reso)
+    # c6 = get_voxel_channel(atoms, X, lambda x: True, lambda x: x.res.acc1, rad=rad, reso=reso)
+    # c7 = get_voxel_channel(atoms, X, lambda x: True, lambda x: x.res.acc2, rad=rad, reso=reso)
+    c8 = get_voxel_channel(atoms, X, lambda x: True, lambda x: x.temp, rad=rad, reso=reso)
+    # return np.stack(atm_channels + [c5, c6, c7, c8], axis=0)
+    return np.stack(atm_channels + [c5, c8], axis=0)
 
 
 def get_voxel_channels_of_residues(atoms, residues, center, rot, rad=10.0, reso=1.0):
-    atoms = select_atoms_in_sphere(atoms, center, rad*1.5)
-    # atm_channels = [get_voxels_around_center(
-    #     atoms, center, rot, lambda x: (x.type == t) and (x.res in residues),
-    #     lambda x: 1, rad=rad, reso=reso) for t in 'CNOS']
-    res_channels = [get_voxels_around_center(
-        atoms, center, rot, lambda x: (x.res.name == aa) and (x.res in residues),
-        lambda x: 1, rad=rad, reso=reso) for aa in amino_acids]
-    return np.stack(res_channels, axis=0)
+    atoms, X = select_atoms_in_box(atoms, center, rot, rad)
+    atm_channels = [get_voxel_channel(atoms, X, lambda x: (x.type == t) and (x.res in residues), lambda x: default, rad=rad, reso=reso) for t in 'CNOS']
+    res_channels = [get_voxel_channel(atoms, X, lambda x: (x.res.name == aa) and (x.res in residues), lambda x: default, rad=rad, reso=reso) for aa in amino_acids]
+    return np.stack(atm_channels + res_channels, axis=0)
 
 
-def select_atoms_in_box(atoms, center, r):
+def fast_matrix_multiplication(A, B):
+    return get_blas_funcs("gemm", [A, B])(1, A, B)
+
+
+def select_atoms_in_box(atoms, center, R, r):
     X = np.asarray([a.coord for a in atoms]) - center
+    X = get_blas_funcs("gemm", [R, X.T])(1, R, X.T).T   # fast matrix multiplication using BLAS
     indx_x = np.intersect1d(np.where(X[:, 0] >= -r), np.where(X[:, 0] <= r))
     indx_y = np.intersect1d(np.where(X[:, 1] >= -r), np.where(X[:, 1] <= r))
     indx_z = np.intersect1d(np.where(X[:, 2] >= -r), np.where(X[:, 2] <= r))
     indx = reduce(np.intersect1d, [indx_x, indx_y, indx_z])
-    return np.asarray(atoms)[indx]
+    return np.asarray(atoms)[indx], X[indx]
+
+
+def select_atoms_in_box_cuda(atoms, center, rot, r):
+    X = torch.tensor([a.coord for a in atoms], dtype=torch.float, device=device)
+    c = torch.tensor(center, dtype=torch.float, device=device)
+    R = torch.tensor(rot, dtype=torch.float, device=device)
+    X = torch.mm(R, (X-c).transpose(0, 1)).transpose(0, 1)
+    ixx = (X[:, 0] >= -r) & (X[:, 0] <= r)
+    ixy = (X[:, 1] >= -r) & (X[:, 1] <= r)
+    ixz = (X[:, 2] >= -r) & (X[:, 2] <= r)
+    ix = ixx & ixy & ixz
+    return np.asarray(atoms)[ix.data.cpu().numpy().astype(bool)], X[ix].data.cpu().numpy()
 
 
 def select_atoms_in_sphere(atoms, center, r):
@@ -162,18 +187,14 @@ def get_cp_descriptors_around_res(atoms, res):
     return np.concatenate([cp46, cp68], axis=0)
 
 
-def get_voxels_around_center(atoms, center, R, selector_fn, value_fn, rad=10.0, reso=1.0, vdw=0.0):
+def get_voxel_channel(atoms, X, selector_fn, value_fn, rad=10.0, reso=1.0, vdw=0.0):
     smooth = vdw / 3.0
-    try: X, y = zip(*[[a.coord, value_fn(a)] for a in atoms if selector_fn(a)])
-    except ValueError: return voxelize([], [], rad, reso, smooth=smooth)
-    X, y = np.asarray(X), np.asarray(y)
-    X -= center
-    X = np.dot(R, X.T).T
-    indx_x = np.intersect1d(np.where(X[:, 0] > -rad), np.where(X[:, 0] < rad))
-    indx_y = np.intersect1d(np.where(X[:, 1] > -rad), np.where(X[:, 1] < rad))
-    indx_z = np.intersect1d(np.where(X[:, 2] > -rad), np.where(X[:, 2] < rad))
-    indx = reduce(np.intersect1d, [indx_x, indx_y, indx_z])
-    return voxelize(X[indx, :], y[indx], rad, reso, smooth=smooth)
+    try:
+        indx = np.vectorize(selector_fn)(atoms)
+        y = np.vectorize(value_fn)(atoms[indx])
+        return voxelize(X[indx], y, rad, reso, smooth=smooth)
+    except ValueError:
+        return voxelize([], [], rad, reso, smooth=smooth)
 
 
 def ref_mat(ca, c, n):
@@ -184,6 +205,7 @@ def ref_mat(ca, c, n):
     v3 /= np.linalg.norm(v3)
     v4 /= np.linalg.norm(v4)
     A = np.matrix([v1, v3, v4])  # A is isometric
+    # print(np.linalg.det(A))   # det(A) == 1
     return A
 
 
@@ -235,21 +257,45 @@ def get_xyz_rotations(circle_frac=0.25):
 def voxelize(X, y, radius, resolution=1.0, smooth=0.0):
     n = int(2.0 * radius / resolution)
     voxels = np.zeros((n, n, n))
-    if len(X) == 0:
-        return voxels
+    if len(X) == 0: return voxels
     shifted_X = X/resolution + n/2.0
     indices = shifted_X.astype(int)
     voxel_centers = indices + resolution/2.0
-    distances = np.sqrt(np.sum(np.power(shifted_X - voxel_centers, 2), axis=1))
+    distances = np.linalg.norm(shifted_X - voxel_centers, axis=1)
     distances = resolution - distances
-    for i, ((i, j, k), v) in enumerate(zip(indices.tolist(), y)):
+    for ix, ((i, j, k), v) in enumerate(zip(indices.tolist(), y)):
         try:
-            voxels[i, j, k] = v if v else distances[i]
+            voxels[i, j, k] = v if v else distances[ix]
         except IndexError:
             continue
     if smooth != 0.0:
         voxels[:, :, :] = gaussian_filter(voxels, sigma=smooth, order=0, output=None, mode='reflect', cval=0.0, truncate=4.0)
     return voxels
+
+
+def plot_3d_ss_voxels(voxels, res_voxels=None):
+    from mpl_toolkits.mplot3d import axes3d, Axes3D
+    import matplotlib.pyplot as plt
+    import numpy as np
+    C = voxels[0].astype(bool)
+    H = voxels[1].astype(bool)
+    E = voxels[2].astype(bool)
+    T = voxels[3].astype(bool)
+    B = res_voxels[0].astype(bool)
+    for i in range(1, 4): B |= res_voxels[i].astype(bool)
+    voxels = C | H | E | T | B
+    # set the colors of each object
+    colors = np.empty(voxels.shape, dtype=object)
+    colors[C] = 'green'
+    colors[H] = 'red'
+    colors[E] = 'yellow'
+    colors[T] = 'cyan'
+    colors[B] = 'black'
+    # and plot everything
+    fig = plt.figure()
+    ax = fig.gca(projection='3d')
+    ax.voxels(voxels, facecolors=colors, edgecolor='k')
+    return plt
 
 
 def plot_3d_atom_voxels(voxels):
@@ -284,31 +330,31 @@ def plot_3d_residue_voxels(voxels):
     # set the colors of each object
     colors = np.empty(voxels.shape, dtype=object)
 
-    colors[AA[amino_acids.index("G")]] = 'pink'
-    colors[AA[amino_acids.index("P")]] = 'orange'
+    colors[AA[amino_acids.index("G")]] = 'grey'
+    colors[AA[amino_acids.index("P")]] = 'pink'
 
-    colors[AA[amino_acids.index("M")]] = 'red'
-    colors[AA[amino_acids.index("A")]] = 'red'
-    colors[AA[amino_acids.index("I")]] = 'red'
-    colors[AA[amino_acids.index("L")]] = 'red'
-    colors[AA[amino_acids.index("V")]] = 'red'
+    colors[AA[amino_acids.index("M")]] = 'yellow'
+    colors[AA[amino_acids.index("A")]] = 'yellow'
+    colors[AA[amino_acids.index("I")]] = 'yellow'
+    colors[AA[amino_acids.index("L")]] = 'yellow'
+    colors[AA[amino_acids.index("V")]] = 'yellow'
 
-    colors[AA[amino_acids.index("F")]] = 'yellow'
-    colors[AA[amino_acids.index("W")]] = 'yellow'
-    colors[AA[amino_acids.index("Y")]] = 'yellow'
+    colors[AA[amino_acids.index("F")]] = 'green'
+    colors[AA[amino_acids.index("W")]] = 'green'
+    colors[AA[amino_acids.index("Y")]] = 'green'
 
-    colors[AA[amino_acids.index("N")]] = 'purple'
-    colors[AA[amino_acids.index("C")]] = 'purple'
-    colors[AA[amino_acids.index("Q")]] = 'purple'
-    colors[AA[amino_acids.index("S")]] = 'purple'
-    colors[AA[amino_acids.index("T")]] = 'purple'
+    colors[AA[amino_acids.index("N")]] = 'cyan'
+    colors[AA[amino_acids.index("C")]] = 'cyan'
+    colors[AA[amino_acids.index("Q")]] = 'cyan'
+    colors[AA[amino_acids.index("S")]] = 'cyan'
+    colors[AA[amino_acids.index("T")]] = 'cyan'
 
     colors[AA[amino_acids.index("R")]] = 'blue'
     colors[AA[amino_acids.index("H")]] = 'blue'
     colors[AA[amino_acids.index("K")]] = 'blue'
 
-    colors[AA[amino_acids.index("D")]] = 'green'
-    colors[AA[amino_acids.index("E")]] = 'green'
+    colors[AA[amino_acids.index("D")]] = 'red'
+    colors[AA[amino_acids.index("E")]] = 'red'
 
     # and plot everything
     fig = plt.figure()
