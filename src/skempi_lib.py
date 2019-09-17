@@ -509,7 +509,7 @@ class Dataset(object):
 
     def __init__(self, records, foldx4=foldx4):
         self.records = records
-        self.X = np.asarray([[foldx4(rec)] + rec.features for rec in self.records], dtype=np.float64)
+        self._X = np.asarray([[foldx4(rec)] + rec.features for rec in self.records], dtype=np.float64)
         self.df = pd.DataFrame([rec.ddg for rec in records], columns=["DDG"])
         self.df["Mutation"] = [','.join([str(m) for m in r.mutations]) for r in self.records]
         self.df["Protein"] = [r.struct.protein for r in self.records]
@@ -518,7 +518,7 @@ class Dataset(object):
 
     def extend(self, dataset2):
         self.df = pd.concat([self.df, dataset2.df])
-        self.X = np.concatenate([self.X, dataset2.X])
+        self._X = np.concatenate([self.X, dataset2.X])
         self.records.extend(dataset2.records)
 
     def __reversed__(self):
@@ -526,7 +526,15 @@ class Dataset(object):
 
     @property
     def shape(self):
-        return self.X.shape
+        return self._X.shape
+
+    @property
+    def X(self):
+        return np.copy(self._X)
+
+    @property
+    def fx4(self):
+        return np.copy(self._X[:, 0])
 
     @property
     def y(self):

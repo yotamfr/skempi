@@ -8,7 +8,7 @@ from tempfile import gettempdir
 from scipy.stats import pearsonr
 from tqdm import tqdm
 
-from pytorch_utils import *
+from torch_utils import *
 from reader_utils import *
 from grid_utils import *
 

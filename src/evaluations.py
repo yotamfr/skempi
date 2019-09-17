@@ -85,12 +85,14 @@ def run_zhang_cv_test(dataset, get_regressor, save_prefix=None, normalize=0, gro
     return df
 
 
-def run_cv_test(dataset, get_regressor, save_prefix=None, normalize=0, groups=DIMER_GROUPS):
+def run_cv_test(dataset, get_regressor, save_prefix=None, normalize=0, groups=DIMER_GROUPS, replace_nan_values=True):
     results = {"Protein": [], "Mutations": [], "Group": [], "DDG": [], "DDG_PRED": []}
     prots = []
-    for g in groups: prots.extend(g)
+    for g in groups:
+        prots.extend(g)
     X, y, names, mutations = dataset.X, dataset.y, dataset.proteins, dataset.mutations
-    X[np.isnan(X)] = 0.0
+    if replace_nan_values:
+        X[np.isnan(X)] = 0.0
     indexes = []
     for i, group in enumerate(groups):
         rest = list(set(prots) - set(group))
@@ -132,10 +134,14 @@ def run_cv_test(dataset, get_regressor, save_prefix=None, normalize=0, groups=DI
     return pd.DataFrame(results)
 
 
-def run_cross_dataset_test(dataset1, dataset2, model, name):
-    X_trn = dataset1.X[dataset1.num_chains <= 2]
+def run_cross_dataset_test(dataset1, dataset2, model, name, replace_nan_values=True):
+    X1, X2 = dataset1.X, dataset2.X
+    if replace_nan_values:
+        X1[np.isnan(X1)] = 0.0
+        X2[np.isnan(X2)] = 0.0
+    X_trn = X1[dataset1.num_chains <= 2]
     y_trn = dataset1.y[dataset1.num_chains <= 2]
-    X_tst = dataset2.X[dataset2.num_chains <= 2]
+    X_tst = X2[dataset2.num_chains <= 2]
     y_tst = dataset2.y[dataset2.num_chains <= 2]
     model.fit(X_trn, y_trn, valid=[X_tst, y_tst], prefix=name)
     y_hat_tst = model.predict(X_tst)
@@ -175,11 +181,11 @@ def plot_bar_charts_with_confidence_interval(dataframes, titles):
                        yerr=stds if len(stds) > 0 else None)
 
         # add some text for labels, title and axes ticks
-        ax.set_ylabel('Scores')
+        ax.set_ylabel(titles[i])
         ax.set_xticks(ind)
         ax.set_xticklabels(reasons, rotation=0)
 
-        ax.legend(rects, [titles[i]])
+        # ax.legend(rects, [titles[i]])
         autolabel(rects)
 
     plt.tight_layout()

@@ -11,6 +11,7 @@ import numpy as np
 writer = SummaryWriter('runs')
 os.environ["CUDA_VISIBLE_DEVICES"] = '1'
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+torch.manual_seed(1)
 
 
 class Flatten(nn.Module):
