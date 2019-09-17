@@ -38,6 +38,7 @@ class Model(nn.Module):
     def fit(self, X, y, valid=None, prefix="anonym", batch_size=96, epochs=1000, l_rate=0.01):
 
         torch.manual_seed(1)
+        np.random.seed(1)
 
         opt = ScheduledOptimizer(optim.Adam(self.parameters(), lr=l_rate), l_rate, num_iterations=10)
 
@@ -45,6 +46,7 @@ class Model(nn.Module):
         for epoch in range(epochs):
             epoch += 1
             i = 0
+            X, y = shuffle(X, y)
             while i < len(X):
                 start = i
                 end = min(i + batch_size, len(X))
@@ -187,12 +189,23 @@ class CompoundLinearModel(CompoundModel):
         self.m2.to(device)
 
 
+class LinearModelSklearn(object):
+
+    def __init__(self, init_cmd="linear_model.Ridge(alpha=1.0)", import_cmd="from sklearn import linear_model"):
+        exec import_cmd
+        self.m = eval(init_cmd)
+
+    def fit(self, x, y, valid=None, prefix="anonym"):
+        self.m.fit(x, y)
+
+    def predict(self, x):
+        o = self.m.predict(x)
+        return o
+
+
 class CompoundModelSklearn(object):
 
-    def __init__(self,
-                 init_cmd="linear_model.Ridge(alpha=.5)",
-                 import_cmd="from sklearn import linear_model"):
-
+    def __init__(self, init_cmd="linear_model.Ridge(alpha=1.0)", import_cmd="from sklearn import linear_model"):
         exec import_cmd
         self.m1 = eval(init_cmd)
         self.m2 = eval(init_cmd)
