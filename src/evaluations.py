@@ -12,9 +12,53 @@ import numpy as np
 
 from scipy.stats import pearsonr
 
+from sklearn.decomposition import PCA
+
 mse = mean_squared_error
 
-rmse = lambda(y, y_hat): sqrt(mean_squared_error(y, y_hat))
+rmse = lambda y, y_hat: sqrt(mean_squared_error(y, y_hat))
+
+
+def run_pca_cv_test(dataset, get_regressor, groups=DIMER_GROUPS, dim=1):
+    results = {"Group1": [], "Group2": [],
+               "PCC_TRN": [], "PCC_TST": [],
+               "MSE_TRN": [], "MSE_TST": []}
+    prots = []
+    for g in groups: prots.extend(g)
+    X, y, names = dataset.X, dataset.y, dataset.proteins
+    for i, pair in enumerate(comb(range(len(groups)), 2)):
+        group = groups[pair[0]] + groups[pair[1]]
+        rest = list(set(prots) - set(group))
+        indx_tst = names.isin(group)
+        indx_trn = names.isin(rest)
+        y_trn = y[indx_trn]
+        y_tst = y[indx_tst]
+        X_trn = X[indx_trn]
+        X_tst = X[indx_tst]
+        regressor = get_regressor(pair[0], pair[1])
+        pca = PCA(n_components=X_trn.shape[1])
+        pca.fit(X_trn)
+        X_trn = pca.transform(X_trn)[:, :dim]
+        X_tst = pca.transform(X_tst)[:, :dim]
+        print("Dim=%d, training G%d, G%d..." % (dim, pair[0] + 1, pair[1] + 1))
+        regressor.fit(X_trn, y_trn)
+        y_hat_trn = regressor.predict(X_trn)
+        cor_trn, _ = pearsonr(y_trn, y_hat_trn)
+        y_hat_tst = regressor.predict(X_tst)
+        cor_tst, _ = pearsonr(y_tst, y_hat_tst)
+        mse_trn = rmse(y_trn, y_hat_trn)
+        mse_tst = rmse(y_tst, y_hat_tst)
+        df = pd.DataFrame([["PCC", cor_trn, cor_tst],
+                          ["MSE", mse_trn, mse_tst]],
+                         columns=["Stat", "TRN", "TST"]).append(
+            get_stats(y_trn, y_tst, lbl1="TRN", lbl2="TST"))
+        results["PCC_TST"].append(cor_tst)
+        results["PCC_TRN"].append(cor_trn)
+        results["MSE_TST"].append(mse_tst)
+        results["MSE_TRN"].append(mse_trn)
+        results["Group1"].append(pair[0] + 1)
+        results["Group2"].append(pair[1] + 1)
+    return pd.DataFrame(results)
 
 
 def get_stats(x1, x2, lbl1="V1", lbl2="V2", eps=0.1):
@@ -67,8 +111,8 @@ def run_zhang_cv_test(dataset, get_regressor, save_prefix=None, normalize=0, gro
         cor_trn, _ = pearsonr(y_trn, y_hat_trn)
         y_hat_tst = regressor.predict(X_tst)
         cor_tst, _ = pearsonr(y_tst, y_hat_tst)
-        mse_trn = mse(y_trn, y_hat_trn)
-        mse_tst = mse(y_tst, y_hat_tst)
+        mse_trn = rmse(y_trn, y_hat_trn)
+        mse_tst = rmse(y_tst, y_hat_tst)
         df = pd.DataFrame([["PCC", cor_trn, cor_tst],
                           ["MSE", mse_trn, mse_tst]],
                           columns=["Stat", "TRN", "TST"]).append(
@@ -121,9 +165,9 @@ def run_cv_test(dataset, get_regressor, save_prefix=None, normalize=0, groups=DI
         cor_trn, _ = pearsonr(y_trn, y_hat_trn)
         y_hat_tst = regressor.predict(X_tst)
         cor_tst, _ = pearsonr(y_tst, y_hat_tst)
-        try: mse_trn = mse(y_trn, y_hat_trn)
+        try: mse_trn = rmse(y_trn, y_hat_trn)
         except ValueError: mse_trn = np.nan
-        try: mse_tst = mse(y_tst, y_hat_tst)
+        try: mse_tst = rmse(y_tst, y_hat_tst)
         except ValueError: mse_tst = np.nan
         print_cv_stats(cor_trn, cor_tst, mse_trn, mse_tst)
         results["Protein"].extend(names[indx_tst])
@@ -148,8 +192,8 @@ def run_cross_dataset_test(dataset1, dataset2, model, name, replace_nan_values=T
     y_hat_trn = model.predict(X_trn)
     cor_trn, _ = pearsonr(y_trn, y_hat_trn)
     cor_tst, _ = pearsonr(y_tst, y_hat_tst)
-    mse_trn = mse(y_trn, y_hat_trn)
-    mse_tst = mse(y_tst, y_hat_tst)
+    mse_trn = rmse(y_trn, y_hat_trn)
+    mse_tst = rmse(y_tst, y_hat_tst)
     print_cv_stats(cor_trn, cor_tst, mse_trn, mse_tst)
     return cor_trn, cor_tst, mse_trn, mse_tst
 
