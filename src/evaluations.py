@@ -16,7 +16,9 @@ from sklearn.decomposition import PCA
 
 mse = mean_squared_error
 
-rmse = lambda y, y_hat: sqrt(mean_squared_error(y, y_hat))
+rmse = lambda x, y: sqrt(mean_squared_error(x, y))
+
+bias = lambda x, y: 0.5 * np.sum([xi - np.mean(y) for xi in x]) / len(x)
 
 
 def run_pca_cv_test(dataset, get_regressor, groups=DIMER_GROUPS, dim=1):

@@ -202,8 +202,7 @@ class SkempiRecord(object):
 
     @property
     def features(self):
-        st = self.mutant if self.reverse else self.struct
-        return get_features(st, self.mutations).values()
+        return get_features(self.mutant if self.reverse else self.struct, self.mutations).values()
 
     def __reversed__(self):
         muts = [reversed(mut) for mut in self.mutations]
