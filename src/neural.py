@@ -10,7 +10,6 @@ from tensorboardX import SummaryWriter
 writer = SummaryWriter('runs')
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 torch.manual_seed(1)
-# device = 'cpu'
 DEBUG = False
 
 
@@ -103,6 +102,99 @@ class LinearRegressionModel(Model):
         outputs = self.forward(inputs).view(-1)
         loss = criterion(outputs, labels)
         return loss, pearsonr_torch(outputs, labels)
+
+
+class ConsistentLinearModel(Model):
+    def __init__(self, input_dim, output_dim=1):
+        super(ConsistentLinearModel, self).__init__()
+        self.r = nn.Sequential(
+            nn.Linear(input_dim, output_dim),
+        )
+        self.r.to(device)
+
+    def forward(self, x):
+        return self.r(x).view(-1)
+
+    def get_loss(self, X, y):
+        inp = torch.tensor(X, dtype=torch.float, device=device)
+        lbl = torch.tensor(y, dtype=torch.float, device=device)
+        y_hat_p = self.forward(inp).view(-1)
+        y_hat_m = self.forward(-inp).view(-1)
+
+        mse = nn.MSELoss()
+        completeness0 = mse(0.5 * (y_hat_p - y_hat_m), lbl)
+        consistency0 = mse(-y_hat_p, y_hat_m)
+
+        loss = completeness0 + consistency0
+        return loss, pearsonr_torch(y_hat_p, lbl)
+
+
+class BiasConsistentLinearModel(Model):
+    def __init__(self, input_dim, output_dim=1):
+        super(BiasConsistentLinearModel, self).__init__()
+        self.r = nn.Sequential(
+            nn.Linear(input_dim, output_dim),
+        )
+        self.r.to(device)
+
+    def forward(self, x):
+        return self.r(x).view(-1)
+
+    def get_loss(self, X, y):
+        inp = torch.tensor(X, dtype=torch.float, device=device)
+        lbl = torch.tensor(y, dtype=torch.float, device=device)
+        y_hat_p = self.forward(inp).view(-1)
+        y_hat_m = self.forward(-inp).view(-1)
+
+        mse = nn.MSELoss()
+        completeness = mse(0.5 * (y_hat_p - y_hat_m), lbl)
+        consistency = mse(-y_hat_p, y_hat_m)
+
+        b_size = y_hat_m.size(0)
+        b_consistency = (y_hat_p - torch.mean(y_hat_m)).sum().div(2*b_size).abs()
+
+        loss = completeness + consistency + b_consistency
+        return loss, pearsonr_torch(y_hat_p, lbl)
+
+
+class BiasConsistentMultiLayerModel(Model):
+    def __init__(self, input_dim, hidden_dim, output_dim=1):
+        super(BiasConsistentMultiLayerModel, self).__init__()
+        self.r1 = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.Tanh(),
+            nn.Linear(hidden_dim, output_dim),
+            nn.Tanh(),
+        )
+        self.r2 = nn.Sequential(
+            nn.Linear(input_dim + 1, output_dim),
+        )
+        self.r1.to(device)
+        self.r2.to(device)
+
+    def forward(self, x):
+        o = self.r2(torch.cat([x, self.r1(x)], 1))
+        return o.view(-1)
+
+    def get_loss(self, X, y):
+        inp = torch.tensor(X, dtype=torch.float, device=device)
+        lbl = torch.tensor(y, dtype=torch.float, device=device)
+        y_hat_p = self.forward(inp).view(-1)
+        y_hat_m = self.forward(-inp).view(-1)
+        z_hat_p = self.r1(inp).view(-1)
+        z_hat_m = self.r1(-inp).view(-1)
+
+        mse = nn.MSELoss()
+        completeness0 = mse(0.5 * (y_hat_p - y_hat_m), lbl)
+        consistency0 = mse(-y_hat_p, y_hat_m)
+        completeness2 = mse(0.5 * (z_hat_p - z_hat_m), torch.sign(lbl))
+        consistency2 = mse(-z_hat_p, z_hat_m)
+
+        b_size = y_hat_m.size(0)
+        b_consistency = (y_hat_p - torch.mean(y_hat_m)).sum().div(2*b_size).pow(2)
+
+        loss = completeness0 + consistency0 + completeness2 + consistency2 + b_consistency
+        return loss, pearsonr_torch(y_hat_p, lbl)
 
 
 class MultiLayerModel(Model):

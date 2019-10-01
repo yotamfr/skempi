@@ -27,7 +27,6 @@ class MSA(object):
 
     def M(self, r1, r2):
         return BLOSUM62[(r1, r2)]
-        # return iPTMs1[(r1, r2)]
 
     def N(self, aa, i):
         return sum(self.ali[:, i] == aa)
@@ -44,7 +43,7 @@ class MSA(object):
             return a + b * self.n_gap(i) + c * self.E(aa, i)
 
     def E(self, aa, i):
-        return sum([self.P(aa, i) * self.M(r, aa) for r in amino_acids])
+        return sum([self.P(r, i) * self.M(r, aa) for r in amino_acids])
 
     def P(self, aa, i):
         return self.N(aa, i) / float(len(self))
@@ -515,10 +514,10 @@ class Dataset(object):
         self.df["Num_Muts"] = [len(r.mutations) for r in self.records]
         self.df["Num_Chains"] = [r.struct.num_chains for r in self.records]
 
-    def extend(self, dataset2):
-        self.df = pd.concat([self.df, dataset2.df])
-        self._X = np.concatenate([self.X, dataset2.X])
-        self.records.extend(dataset2.records)
+    # def extend(self, dataset2):
+    #     self.df = pd.concat([self.df, dataset2.df])
+    #     self._X = np.concatenate([self.X, dataset2.X])
+    #     self.records.extend(dataset2.records)
 
     def __reversed__(self):
         return Dataset([reversed(rec) for rec in self.records])

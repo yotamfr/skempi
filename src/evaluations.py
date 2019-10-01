@@ -81,13 +81,15 @@ def print_cv_stats(pcc_trn, pcc_tst, mse_trn, mse_tst):
     print("MSE: %.3f, %.3f" % (mse_trn, mse_tst))
 
 
-def run_zhang_cv_test(dataset, get_regressor, save_prefix=None, normalize=0, groups=DIMER_GROUPS, h=2):
+def run_zhang_cv_test(dataset, get_regressor, save_prefix=None, normalize=0, groups=DIMER_GROUPS, replace_nan_values=1):
     results = {"Group1": [], "Group2": [],
                "PCC_TRN": [], "PCC_TST": [],
                "MSE_TRN": [], "MSE_TST": []}
     prots = []
     for g in groups: prots.extend(g)
     X, y, names = dataset.X, dataset.y, dataset.proteins
+    if replace_nan_values:
+        X[np.isnan(X)] = 0.0
     for i, pair in enumerate(comb(range(len(groups)), 2)):
         group = groups[pair[0]] + groups[pair[1]]
         rest = list(set(prots) - set(group))
@@ -119,7 +121,7 @@ def run_zhang_cv_test(dataset, get_regressor, save_prefix=None, normalize=0, gro
                           ["MSE", mse_trn, mse_tst]],
                           columns=["Stat", "TRN", "TST"]).append(
             get_stats(y_trn, y_tst, lbl1="TRN", lbl2="TST"))
-        print(df.head(h))
+        print(df.head(2))
         results["PCC_TST"].append(cor_tst)
         results["PCC_TRN"].append(cor_trn)
         results["MSE_TST"].append(mse_tst)
@@ -131,7 +133,7 @@ def run_zhang_cv_test(dataset, get_regressor, save_prefix=None, normalize=0, gro
     return df
 
 
-def run_cv_test(dataset, get_regressor, save_prefix=None, normalize=0, groups=DIMER_GROUPS, replace_nan_values=True):
+def run_cv_test(dataset, get_regressor, save_prefix=None, normalize=0, groups=DIMER_GROUPS, replace_nan_values=1):
     results = {"Protein": [], "Mutations": [], "Group": [], "DDG": [], "DDG_PRED": []}
     prots = []
     for g in groups:
@@ -200,39 +202,55 @@ def run_cross_dataset_test(dataset1, dataset2, model, name, replace_nan_values=T
     return cor_trn, cor_tst, mse_trn, mse_tst
 
 
-def plot_bar_charts_with_confidence_interval(dataframes, titles):
+def plot_bar_charts_with_confidence_interval(dataframes, titles, labels, size=6):
     import numpy as np
     import matplotlib.pyplot as plt
 
-    def autolabel(rects):
+    def autolabel(rects, xpos='center'):
+        """
+        Attach a text label above each bar in *rects*, displaying its height.
+
+        *xpos* indicates which side to place the text w.r.t. the center of
+        the bar. It can be one of the following {'center', 'right', 'left'}.
+        """
+
+        ha = {'center': 'center', 'right': 'left', 'left': 'right'}
+        offset = {'center': 0, 'right': 1, 'left': -1}
+
         for rect in rects:
             height = rect.get_height()
-            ax.text(rect.get_x() + rect.get_width() / 2., 1.05 * height,
-                    '%.2f' % height, ha='center', va='bottom')
+            ax.annotate('%.2f' % height,
+                        xy=(rect.get_x() + rect.get_width() / 2, height),
+                        xytext=(offset[xpos] * 3, 3),  # use 3 points offset
+                        textcoords="offset points",  # in both directions
+                        ha=ha[xpos], va='bottom')
 
     fig, axarr = plt.subplots(1, len(dataframes))
     for i in range(len(dataframes)):
-        ax = axarr[i]
-        df = dataframes[i]
-        reasons = df.columns.tolist()
+
+        dfs = dataframes[i]
+        assert 1 <= len(dfs) <= 2
+
+        reasons = dfs[0].columns.tolist()
         N = len(reasons)
         ind = np.arange(N)  # the x locations for the groups
         width = 0.35  # the width of the bars
 
-        means = df.mean()
-        stds = df.std()
-
-        ax.figure.set_size_inches(4 * len(dataframes), 4)
-        rects = ax.bar(ind, means, width, color='r',
-                       yerr=stds if len(stds) > 0 else None)
-
-        # add some text for labels, title and axes ticks
+        ax = axarr[i]
+        ax.figure.set_size_inches(size * len(dataframes), size)
         ax.set_ylabel(titles[i])
         ax.set_xticks(ind)
         ax.set_xticklabels(reasons, rotation=0)
 
-        # ax.legend(rects, [titles[i]])
-        autolabel(rects)
+        all_rects = []
+        for df, pos, label, c, o in zip(dfs, ["left", "right"], labels, ['r', 'b'], [-width / 2, width / 2]):
+            means = df.mean()
+            stds = df.std()
+            rects = ax.bar(ind + o, means, width, yerr=stds if len(stds) > 0 else None, label=label, color=c)
+            all_rects.append(rects)
+            autolabel(rects, pos)
+
+        ax.legend(all_rects, labels)
 
     plt.tight_layout()
 
