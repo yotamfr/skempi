@@ -213,14 +213,18 @@ class MultiLayerModel(Model):
         self.r2.to(device)
 
     def forward(self, x):
-        o = self.r2(torch.cat([x, self.r1(x)], 1))
-        return o.view(-1)
+        return (self._forward(x)-self._forward(-x)).div(2).view(-1)
+
+    def _forward(self, x):
+        return self.r2(torch.cat([x, self.r1(x)], 1)).view(-1)
 
     def get_loss(self, X, y):
         inp = torch.tensor(X, dtype=torch.float, device=device)
         lbl = torch.tensor(y, dtype=torch.float, device=device)
-        y_hat_p = self.forward(inp).view(-1)
-        y_hat_m = self.forward(-inp).view(-1)
+
+        y_hat_p = self._forward(inp).view(-1)
+        y_hat_m = self._forward(-inp).view(-1)
+
         z_hat_p = self.r1(inp).view(-1)
         z_hat_m = self.r1(-inp).view(-1)
 

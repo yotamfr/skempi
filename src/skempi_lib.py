@@ -659,15 +659,16 @@ def load_skempi_v2(df): return load_skempi(df[df.version == 2].reset_index(drop=
 #     return df
 
 
-def prepare_skempi_v2():
-    with open(osp.join('..', 'data', 'skempi_v2.csv'), 'r') as f:
+def prepare_skempi_v2(path_to_csv=osp.join('..', 'data', 'skempi_v2.csv')):
+    with open(path_to_csv, 'r') as f:
         lines = f.readlines()
     head = lines.pop(0)
     data, num_mutations = [], []
     while lines:
         line = lines.pop(0)
         row = [s for s in line.strip().split(";")]
-        if "1KBH" == row[0][:4]: continue
+        if "1KBH" == row[0][:4]:
+            continue
         for i, item in enumerate(row[1:]):
             try: parse_mutations(item)
             except: break
