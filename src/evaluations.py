@@ -18,7 +18,9 @@ mse = mean_squared_error
 
 rmse = lambda x, y: sqrt(mean_squared_error(x, y))
 
-bias = lambda x, y: 0.5 * np.sum([xi - np.mean(y) for xi in x]) / len(x)
+bias = lambda x, y: np.mean(x) - np.mean(y)
+
+accuracy = lambda x, y: (np.asarray(np.sign(x)) == np.asarray(np.sign(y))).sum(axis=0) / float(len(x))
 
 
 def run_pca_cv_test(dataset, get_regressor, groups=DIMER_GROUPS, dim=1):
@@ -199,7 +201,7 @@ def run_cross_dataset_test(dataset1, dataset2, model, name, replace_nan_values=T
     mse_trn = rmse(y_trn, y_hat_trn)
     mse_tst = rmse(y_tst, y_hat_tst)
     print_cv_stats(cor_trn, cor_tst, mse_trn, mse_tst)
-    return cor_trn, cor_tst, mse_trn, mse_tst
+    return y_tst, y_hat_tst
 
 
 def plot_bar_charts_with_confidence_interval(dataframes, titles, labels, size=6):
@@ -253,6 +255,19 @@ def plot_bar_charts_with_confidence_interval(dataframes, titles, labels, size=6)
         ax.legend(all_rects, labels)
 
     plt.tight_layout()
+
+
+def plot_scatter_plots_with_titles(xys, titles, colors, size=6):
+
+    import matplotlib.pyplot as plt
+    plt.figure(figsize=(len(xys) * size, size))
+
+    for i, (x, y) in enumerate(xys):
+        plt.subplot(1, len(xys), i+1)
+        plt.scatter(x, y, color=colors[i])
+        plt.xlabel("Predicted ddG (dir)")
+        plt.ylabel("Predicted ddG (inv)")
+        plt.title("%s: pearsonr=%.3f, bias=%.3f" % (titles[i], pearsonr(x, y)[0], bias(x, -y)))
 
 
 def evaluate_bfx_cv(bfx, ddg, names, groups=DIMER_GROUPS):

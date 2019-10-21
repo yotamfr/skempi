@@ -92,8 +92,10 @@ class LinearRegressionModel(Model):
         self.model.to(device)
 
     def forward(self, x):
-        out = self.model(x).view(-1)
-        return out
+        return (self._forward(x)-self._forward(-x)).div(2).view(-1)
+
+    def _forward(self, x):
+        return self.model(x).view(-1)
 
     def get_loss(self, X, y):
         criterion = nn.MSELoss()
@@ -214,28 +216,36 @@ class MultiLayerModel(Model):
 
     def forward(self, x):
         return (self._forward(x)-self._forward(-x)).div(2).view(-1)
+        # return self._forward(x)
 
     def _forward(self, x):
         return self.r2(torch.cat([x, self.r1(x)], 1)).view(-1)
 
+    def predict2(self, X):
+        self.eval()
+        x = torch.tensor(X, dtype=torch.float, device=device)
+        o1 = self.forward(x).view(-1).cpu().data.numpy()
+        o2 = self.r1(x).view(-1).cpu().data.numpy()
+        return o1, o2
+
     def get_loss(self, X, y):
-        inp = torch.tensor(X, dtype=torch.float, device=device)
-        lbl = torch.tensor(y, dtype=torch.float, device=device)
+        x = torch.tensor(X, dtype=torch.float, device=device)
+        y = torch.tensor(y, dtype=torch.float, device=device)
 
-        y_hat_p = self._forward(inp).view(-1)
-        y_hat_m = self._forward(-inp).view(-1)
-
-        z_hat_p = self.r1(inp).view(-1)
-        z_hat_m = self.r1(-inp).view(-1)
+        y_hat_p = self._forward(x).view(-1)
+        y_hat_m = self._forward(-x).view(-1)
+        z_hat_p = self.r1(x).view(-1)
+        z_hat_m = self.r1(-x).view(-1)
 
         mse = nn.MSELoss()
-        completeness0 = mse(0.5 * (y_hat_p - y_hat_m), lbl)
-        consistency0 = mse(-y_hat_p, y_hat_m)
-        completeness2 = mse(0.5 * (z_hat_p - z_hat_m), torch.sign(lbl))
+        completeness1 = mse(0.5 * (y_hat_p - y_hat_m), y)
+        consistency1 = mse(-y_hat_p, y_hat_m)
+        completeness2 = mse(0.5 * (z_hat_p - z_hat_m), torch.sign(y))
         consistency2 = mse(-z_hat_p, z_hat_m)
 
-        loss = completeness0 + consistency0 + completeness2 + consistency2
-        return loss, pearsonr_torch(y_hat_p, lbl)
+        loss = completeness1 + completeness2 + consistency2
+        # loss = mse(y_hat_p, y) + mse(z_hat_p, torch.sign(y))
+        return loss, pearsonr_torch(y_hat_p, y)
 
 
 class CompoundModel(Model):

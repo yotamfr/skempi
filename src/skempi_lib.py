@@ -73,9 +73,7 @@ class Profile(object):
         return len(self._profile)
 
 
-def zscore_filter(ys):
-    eps = 10e-6
-    threshold = 3.5
+def zscore_filter(ys, eps=10e-6, threshold=3.5):
     median_y = np.median(ys)
     median_absolute_deviation_y = np.median([np.abs(y - median_y) for y in ys]) + eps
     modified_z_scores = [0.6745 * (y - median_y) / median_absolute_deviation_y for y in ys]
@@ -181,6 +179,7 @@ class SkempiRecord(object):
         self.mutations = mutations
         if load_mutant: self.load_mutant()
         self.reverse = False
+        self.fx4 = foldx4(self)
 
     @property
     def ddg(self):
@@ -200,14 +199,16 @@ class SkempiRecord(object):
         self.mutant = SkempiStruct(mutant_sturct, ca, cb, profiles, alignments)
 
     @property
-    def features(self):
-        return get_features(self.mutant if self.reverse else self.struct, self.mutations).values()
+    def features(self, include_foldx4=True):
+        feats = get_features(self.mutant if self.reverse else self.struct, self.mutations).values()
+        return [self.fx4] + feats if include_foldx4 else feats
 
     def __reversed__(self):
         muts = [reversed(mut) for mut in self.mutations]
         record = SkempiRecord(self.mutant, muts, [-v for v in self.ddg_arr], load_mutant=False)
         record.reverse = not self.reverse
         record.mutant = self.struct
+        record.fx4 = foldx4(record)
         return record
 
     def __str__(self):
@@ -505,22 +506,17 @@ def get_interactions(struct, mut, rad=4.0, ignore_list=BACKBONE_ATOMS):
 
 class Dataset(object):
 
-    def __init__(self, records, foldx4=foldx4):
-        self.records = records
-        self._X = np.asarray([[foldx4(rec)] + rec.features for rec in self.records], dtype=np.float64)
-        self.df = pd.DataFrame([rec.ddg for rec in records], columns=["DDG"])
-        self.df["Mutation"] = [','.join([str(m) for m in r.mutations]) for r in self.records]
-        self.df["Protein"] = [r.struct.protein for r in self.records]
-        self.df["Num_Muts"] = [len(r.mutations) for r in self.records]
-        self.df["Num_Chains"] = [r.struct.num_chains for r in self.records]
-
-    # def extend(self, dataset2):
-    #     self.df = pd.concat([self.df, dataset2.df])
-    #     self._X = np.concatenate([self.X, dataset2.X])
-    #     self.records.extend(dataset2.records)
+    def __init__(self, list_of_records):
+        self._records = list_of_records
+        self._X = np.asarray([rec.features for rec in list_of_records], dtype=np.float64)
+        self.df = pd.DataFrame([rec.ddg for rec in list_of_records], columns=["DDG"])
+        self.df["Mutation"] = [','.join([str(m) for m in rr.mutations]) for rr in list_of_records]
+        self.df["Protein"] = [rr.struct.protein for rr in list_of_records]
+        self.df["Num_Muts"] = [len(rr.mutations) for rr in list_of_records]
+        self.df["Num_Chains"] = [rr.struct.num_chains for rr in list_of_records]
 
     def __reversed__(self):
-        return Dataset([reversed(rec) for rec in self.records])
+        return Dataset([reversed(rec) for rec in self._records])
 
     @property
     def shape(self):
@@ -555,10 +551,10 @@ class Dataset(object):
         return self.df.Num_Muts
 
     def __getitem__(self, i):
-        return self.records[i]
+        return self._records[i]
 
     def __len__(self):
-        return len(self.records)
+        return len(self._records)
 
 
 def protherm_generator(dataframe, path_to_pdbs, load_mut=True, min_seq_length=0):
