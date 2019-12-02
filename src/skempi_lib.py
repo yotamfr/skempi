@@ -94,7 +94,7 @@ class SkempiStruct(PDB):
         self.chains_a = chains_a
         self.chains_b = chains_b
         self.stride = get_stride(self, chains_a, chains_b)
-        self.init_residues()
+        # self.init_residues()
 
     def init_residues(self):
         for c in self._chains:
@@ -126,8 +126,12 @@ class SkempiStruct(PDB):
 
     def get_consrv(self, chain_id, posi, eps=0.0001):
         w = self[chain_id][posi].name
-        if w == 'X': return 0.0     # zero information
-        return -np.log(max(self.get_profile(chain_id)[(posi, w)], eps))
+        if w == 'X':
+            return 0.0     # zero information
+        try:
+            return -np.log(max(self.get_profile(chain_id)[(posi, w)], eps))
+        except IndexError as e:
+            raise e
 
     def get_ss(self, chain_id, posi):
         try: return self.stride[(chain_id, posi)]["SS"]
@@ -177,7 +181,8 @@ class SkempiRecord(object):
         self.mutant = None
         assert all([skempi_struct[m.chain_id][m.i].name == m.w for m in mutations])
         self.mutations = mutations
-        if load_mutant: self.load_mutant()
+        if load_mutant:
+            self.load_mutant()
         self.reverse = False
         self.fx4 = foldx4(self)
 
@@ -190,10 +195,10 @@ class SkempiRecord(object):
         return self.struct.pdb[:4].upper()
 
     def load_mutant(self):
-        wt = self.struct
-        mutantname, ws = apply_modeller(wt, self.mutations)
+        mutantname, ws = apply_modeller(self.struct, self.mutations)
         pth = osp.join(ws, "%s.pdb" % mutantname)
-        mutant_sturct = parse_pdb(mutantname, open(pth, 'r'))
+        with open(pth, 'r') as f:
+            mutant_sturct = parse_pdb(mutantname, f)
         profiles, alignments = self.struct.profiles, self.struct.alignments
         ca, cb = self.struct.chains_a, self.struct.chains_b
         self.mutant = SkempiStruct(mutant_sturct, ca, cb, profiles, alignments)
@@ -204,8 +209,11 @@ class SkempiRecord(object):
         return [self.fx4] + feats if include_foldx4 else feats
 
     def __reversed__(self):
-        muts = [reversed(mut) for mut in self.mutations]
-        record = SkempiRecord(self.mutant, muts, [-v for v in self.ddg_arr], load_mutant=False)
+        if not self.mutant:
+            self.load_mutant()
+        record = SkempiRecord(self.mutant,
+                              [reversed(mut) for mut in self.mutations],
+                              [-v for v in self.ddg_arr], load_mutant=False)
         record.reverse = not self.reverse
         record.mutant = self.struct
         record.fx4 = foldx4(record)
@@ -354,9 +362,12 @@ def score_evo(struct, mut, a=25, b=0, c=0):
 
 
 def ac_ratio(st, chain_id, pos):
-    d = (lambda dic: dic["ASA_Chain"] - dic["ASA"])(st.stride[(chain_id, pos)])
-    w = st[chain_id][pos].name
-    return float(d) / MaxASA_emp[w]
+    try:
+        d = (lambda dic: dic["ASA_Chain"] - dic["ASA"])(st.stride[(chain_id, pos)])
+        w = st[chain_id][pos].name
+        return float(d) / MaxASA_emp[w]
+    except KeyError, e:
+        raise e
 
 
 def score_bi(struct, mut, B=BLOSUM62):
@@ -640,21 +651,6 @@ def load_skempi_v1(df): return load_skempi(df[df.version == 1].reset_index(drop=
 def load_skempi_v2(df): return load_skempi(df[df.version == 2].reset_index(drop=True), SKMEPI2_PDBs, False)
 
 
-# def prepare_zemu():
-#     df = pd.read_csv(osp.join('..', 'data', 'dataset_ZEMu.2.csv'))
-#     df2 = skempi_df_v2
-#     df1 = skempi_df
-#     df["DDG"] = df[" Gexp (kcal/mol)"]
-#     df["ZEMu"] = df[" G ZEMu (kcal/mol) \tID"]
-#     df["Mutation(s)_cleaned"] = df[" Mutant"].apply(lambda s: s.replace(".", ","))
-#     pdbs, _, _ = zip(*[prot.split('_') for prot in df2["#Pdb"]])
-#     D = {pdb: cpx for pdb, cpx in zip(pdbs, df2["#Pdb"])}
-#     pdbs, _, _ = zip(*[prot.split('_') for prot in df1.Protein])
-#     D.update({pdb: cpx for pdb, cpx in zip(pdbs, df1.Protein)})
-#     df["Protein"] = [D[p] for p in df["\PDB ID"]]
-#     return df
-
-
 def prepare_skempi_v2(path_to_csv=osp.join('..', 'data', 'skempi_v2.csv')):
     with open(path_to_csv, 'r') as f:
         lines = f.readlines()
@@ -724,17 +720,7 @@ except IOError as e:
 
 
 if __name__ == "__main__":
-    from tqdm import tqdm
-    st = ProthermStruct(parse_pdb("1LVE", open(osp.join("..", "data", "mutation_data_sets", "pdbs", "1lve.pdb"), 'r')))
-    i, structs = 29, {}
-    row = skempi_df.loc[i]
-    t = tuple(row.Protein.split('_'))
-    pth = osp.join("..", "data", "pdbs", "%s.pdb" % t[0])
-    structs[t] = SkempiStruct(parse_pdb(t[0], open(pth, 'r')), t[1], t[2])
-    records = []
-    row = skempi_df.loc[i]
-    mutations = parse_mutations(row["Mutation(s)_cleaned"])
-    modelname, chain_A, chain_B = t = row.Protein.split('_')
-    r = SkempiRecord(structs[tuple(t)], mutations)
-    f = get_features(r.struct, r.mutations)
-    print(f)
+    records_v1 = load_skempi(skempi_df_v2[skempi_df_v2.version == 1].reset_index(drop=True), SKMEPI2_PDBs, False)
+    dataset_v1 = Dataset(records_v1)
+    records_v2 = load_skempi(skempi_df_v2[skempi_df_v2.version == 2].reset_index(drop=True), SKMEPI2_PDBs, False)
+    dataset_v2 = Dataset(records_v2)

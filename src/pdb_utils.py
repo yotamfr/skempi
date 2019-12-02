@@ -24,6 +24,7 @@ AA_dict = {
     "TRP": "W",
     "TYR": "Y",
     "VAL": "V",
+    "UNK": "X"
 }
 AAA = {v: k for k, v in AA_dict.iteritems()}
 
@@ -215,7 +216,7 @@ class Residue(object):
         return hash((self.chain, self.num, self._name))
 
     def __str__(self):
-        return "<Residue %s:%s>" % (self._name, self.num)
+        return "<Residue %s:%d>" % (self._name, self.num)
 
 
 class Chain(object):
@@ -311,7 +312,10 @@ class PDB(object):
         return hash(str(self))
 
     def __getitem__(self, chain_id):
-        return self._chains[self._id_to_ix[chain_id]]
+        try:
+            return self._chains[self._id_to_ix[chain_id]]
+        except KeyError, e:
+            raise e
 
     def __str__(self):
         return "<%s: %s>" % (self.pdb, ','.join([c.chain_id for c in self._chains]))
@@ -320,8 +324,13 @@ class PDB(object):
         lines = []
         for chain in self._chains:
             for atom in chain.atoms:
-                lines.append("%s\n" % atom)
+                try:
+                    lines.append("%s\n" % atom)
+                except KeyError as e:
+                    raise e
             lines.append("TER\n")
+        if len(lines) == 0:
+            return
         with open(path, "w+") as f:
             f.writelines(lines)
 
@@ -349,7 +358,7 @@ def _handle_line(line, atoms, residues, chains, pdb, chain_id='A', residue_num=0
         l_line = [s.strip() for s in l_line]
         atom_num, atom_name, res_name, chain_id, res_num, x, y, z, occup, temp, ident, sym = l_line
         chain_id = chain_id if chain_id else 'A'            # TODO: why modeller outputs '' chain_id?
-        atom_num, res_num = int(atom_num), res_num
+        atom_num = int(atom_num)
 
         try:
             occup, temp = float(occup), float(temp)
@@ -363,7 +372,7 @@ def _handle_line(line, atoms, residues, chains, pdb, chain_id='A', residue_num=0
         atom = Atom(atom_name, atom_num, None, float(x), float(y), float(z), occup, temp, chain_id)
 
         if len(residues) == 0 or residue_num != res_num:
-            res = Residue(res_name, res_num, len(residues), None, [atom])
+            res = Residue(res_name, len(residues) + 1, len(residues), None, [atom])
             residues.append(res)
         else:
             res = residues[-1]
@@ -394,6 +403,8 @@ def _handle_line(line, atoms, residues, chains, pdb, chain_id='A', residue_num=0
 
 def parse_pdb(pdb, fd, chain_dict={}):
     line = fd.readline()
+    if line == '':
+        raise IOError("file %s is empty" % fd.name)
     atoms, residues, chains, chain_id, res_num = _handle_line(line, [], [], [], pdb)
     models = []
     while line:
@@ -403,8 +414,10 @@ def parse_pdb(pdb, fd, chain_dict={}):
         st = PDB(pdb, [c for c in chains if len(c) > 0], chain_dict)
         models.append(st)
         line = fd.readline()
-    try: return models[0]
-    except IndexError: print(pdb)
+    try:
+        return models[0]
+    except IndexError as e:
+        raise IOError("something is wrong with %s" % fd.name)
 
 
 def parse_pdb2(pdb, path):

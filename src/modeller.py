@@ -1,6 +1,6 @@
 import os
 import sys
-import shutil
+import time
 from os import path as osp
 from glob import glob
 
@@ -120,7 +120,7 @@ class Ali(object):
         return "%s\n%s" % (self.template, self.mutant)
 
 
-def apply_modeller(pdb_struct, mutations):
+def apply_modeller(pdb_struct, mutations, expiration_time_sec=EXPIRATION_TIME_SECONDS):
     tmpl = Template(pdb_struct)
     mutant = Mutant(pdb_struct, mutations)
     ws = "modeller/%s" % mutant.name
@@ -131,14 +131,14 @@ def apply_modeller(pdb_struct, mutations):
         pdb_struct.to_pdb(dst1)
     create_modeller_workspace(tmpl, mutant, ws)
     dst2 = osp.join(ws, "%s.pdb" % mutant.name)
-    if osp.exists(dst2):
-        return mutant.name, ws
-    cline = "cd %s; %s mutate-model.py" % (ws, sys.executable)
-    assert os.WEXITSTATUS(os.system(cline)) == 0
-    src2 = glob(osp.join(ws, "%s*.pdb" % mutant.name))[0]
+    if not osp.exists(dst2):    # or (time.time() - osp.getmtime(dst2) >= expiration_time_sec):
+        try:
+            cline = "cd %s; %s mutate-model.py" % (ws, sys.executable)
+            assert os.WEXITSTATUS(os.system(cline)) == 0
+        except AssertionError as e:
+            raise e
+    src2 = glob(osp.join(ws, "%s.*.pdb" % mutant.name))[0]
     with open(src2, "r") as f:
-        ids = [c.chain_id for c in pdb_struct]
-        chain_dict = dict(zip(MODELLER_CHAINS, ids))
-        struct = parse_pdb(mutant.name, f, chain_dict)
-        struct.to_pdb(dst2)
+        chain_dict = dict(zip(MODELLER_CHAINS, [c.chain_id for c in pdb_struct]))
+        parse_pdb(mutant.name, f, chain_dict).to_pdb(dst2)
     return mutant.name, ws

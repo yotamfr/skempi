@@ -137,19 +137,6 @@ class Profile(object):
         return pos_dict[a]  ### + 0.05 * pos_dict['-']
 
 
-# class Profile(object):
-#     def __init__(self, pdb, chain):
-#         uid = "%s_%s" % (pdb, chain)
-#         doc = collection_msa.find_one({
-#             "_id": uid})
-#         assert doc is not None
-#         self._profile = doc["profile"]
-#
-#     def __getitem__(self, t):
-#         i, a = t
-#         return self._profile[i][a]
-
-
 class Stride(object):
     def __init__(self, stride_df):
         self._dict = {}
