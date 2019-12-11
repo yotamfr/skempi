@@ -720,7 +720,7 @@ except IOError as e:
 
 
 if __name__ == "__main__":
-    records_v1 = load_skempi(skempi_df_v2[skempi_df_v2.version == 1].reset_index(drop=True), SKMEPI2_PDBs, False)
-    dataset_v1 = Dataset(records_v1)
-    records_v2 = load_skempi(skempi_df_v2[skempi_df_v2.version == 2].reset_index(drop=True), SKMEPI2_PDBs, False)
-    dataset_v2 = Dataset(records_v2)
+    records_v1 = load_skempi(skempi_df_v2[skempi_df_v2.version == 1].reset_index(drop=True), SKMEPI2_PDBs, True)
+    dataset_v1 = reversed(Dataset(records_v1))
+    records_v2 = load_skempi(skempi_df_v2[skempi_df_v2.version == 2].reset_index(drop=True), SKMEPI2_PDBs, True)
+    dataset_v2 = reversed(Dataset(records_v2))

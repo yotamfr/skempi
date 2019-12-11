@@ -86,7 +86,7 @@ def bindprofx(skempi_record, bindprofx_home=BINDPROFX_HOME, bindprofx_data=BINDP
     return get_bpx_score(result_path)
 
 
-def foldx4(skempi_record, foldx4_home=FOLDX4_HOME):
+def foldx4(skempi_record, foldx4_home=FOLDX4_HOME, num_retries=1):
     if skempi_record.struct.num_chains > 2:
         return None
     st = skempi_record.struct
@@ -107,20 +107,20 @@ def foldx4(skempi_record, foldx4_home=FOLDX4_HOME):
     if not osp.exists(ws):
         os.makedirs(ws)
 
-    if not osp.exists("%s/complex.pdb" % (ws,)):
-        st.to_pdb("%s/complex.pdb" % (ws,))
+    st.to_pdb("%s/complex.pdb" % (ws,))
     with open("%s/mut_list.txt" % (ws,), "w+") as f:
         f.write("%s;\n" % ";".join([str(m) for m in mutations]))
 
     cline = "../../runFoldX.py complex.pdb mut_list.txt %s score.txt" % (chains,)
-    try:
-        p = subprocess.Popen(cline.split(), cwd=ws, stdout=open(os.devnull, 'w'), stderr=subprocess.STDOUT)
-        p.communicate()
-        assert p.returncode == 0
-        score = get_bpx_score("%s/score.txt" % (ws,))
-    except (AssertionError,) as e:
-        score = None
-    return score
+    p = subprocess.Popen(cline.split(), cwd=ws, stdout=open(os.devnull, 'w'), stderr=subprocess.STDOUT)
+    p.communicate()
+    if p.returncode == 0:
+        return get_bpx_score("%s/score.txt" % (ws,))
+    elif num_retries > 0:
+        shutil.rmtree(ws)
+        return foldx4(skempi_record, num_retries=num_retries-1)
+    else:
+        return None
 
 
 if __name__ == "__main__":
