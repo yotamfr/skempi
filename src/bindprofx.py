@@ -128,7 +128,7 @@ if __name__ == "__main__":
     from tqdm import tqdm
     from time import sleep
     lim = None
-    records = load_skempi(skempi_df_v2[:lim], SKMEPI2_PDBs, True, 0)
+    records = load_skempi(skempi_df_v2[:lim], SKMEPI2_PDBs, True, False, 0)
     records = [reversed(r) for r in records]
     tasks = [E.submit(foldx4, r) for r in records]
     pbar, f4x = tqdm(total=len(records), desc="records processed"), {}

@@ -498,7 +498,7 @@ class PhysicalModel2(PhysicalModel):
 if __name__ == "__main__":
     lim = 100
     df = skempi_df_v2
-    records = load_skempi(df[df.version == 2].reset_index(drop=True)[:lim], SKMEPI2_PDBs, False)
+    records = load_skempi(df[df.version == 2].reset_index(drop=True)[:lim], SKMEPI2_PDBs, False, False)
     y = np.asarray([r.ddg for r in records])
     X = np.asarray([get_neural_features(r.struct, r.mutations) for r in records])
     m1 = PhysicalModel1()

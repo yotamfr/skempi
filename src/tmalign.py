@@ -53,7 +53,7 @@ if __name__ == "__main__":
     from skempi_lib import *
     from scipy.cluster.hierarchy import fcluster
     from scipy.cluster.hierarchy import linkage
-    records = load_skempi(skempi_df_v2, SKMEPI2_PDBs, False, 12)
+    records = load_skempi(skempi_df_v2, SKMEPI2_PDBs, False, False, 12)
     structs = list(set([r.struct for r in records]))
     df = get_distance_matrix(np.asarray(structs))
     X = squareform(df.values)

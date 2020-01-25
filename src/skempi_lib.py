@@ -94,16 +94,6 @@ class SkempiStruct(PDB):
         self.chains_a = chains_a
         self.chains_b = chains_b
         self.stride = get_stride(self, chains_a, chains_b)
-        # self.init_residues()
-
-    def init_residues(self):
-        for c in self._chains:
-            for i, r in enumerate(c.residues):
-                assert r.index == i
-                r.ss = self.get_ss(c.chain_id, i)
-                r.consv = self.get_consrv(c.chain_id, i)
-                r.acc1 = self.get_acc1(c.chain_id, i)
-                r.acc2 = self.get_acc2(c.chain_id, i)
 
     def init_profiles(self):
         if self.profiles is not None:
@@ -155,6 +145,9 @@ class SkempiStruct(PDB):
     def protein(self):
         return "%s_%s_%s" % (self.pdb[:4], self.chains_a, self.chains_b)
 
+    def __eq__(self, other):
+        return self.protein == other.protein
+
     @property
     def num_chains(self):
         return len(self.chains_a + self.chains_b)
@@ -173,16 +166,28 @@ class ProthermStruct(SkempiStruct):
         return 0.0
 
 
+def simulate_mutations(structure, mutations):
+    mutantname, ws = apply_modeller(structure, mutations)
+    pth = osp.join(ws, "%s.pdb" % mutantname)
+    with open(pth, 'r') as f:
+        modeled_struct = parse_pdb(mutantname, f)
+    profiles, alignments = structure.profiles, structure.alignments
+    ca, cb = structure.chains_a, structure.chains_b
+    return SkempiStruct(modeled_struct, ca, cb, profiles, alignments)
+
+
 class SkempiRecord(object):
 
-    def __init__(self, skempi_struct, mutations, ddg_arr=[], load_mutant=True):
+    def __init__(self, skempi_struct, mutations, ddg_arr=[], load_mutant=True, modeller_struct=False):
         self.ddg_arr = ddg_arr
         self.struct = skempi_struct
         self.mutant = None
         assert all([skempi_struct[m.chain_id][m.i].name == m.w for m in mutations])
         self.mutations = mutations
         if load_mutant:
-            self.load_mutant()
+            self.mutant = simulate_mutations(self.struct, self.mutations)
+        if modeller_struct:
+            self.struct = simulate_mutations(self.struct, [mut.identity for mut in self.mutations])
         self.reverse = False
         self.fx4 = foldx4(self)
 
@@ -194,15 +199,6 @@ class SkempiRecord(object):
     def pdb(self):
         return self.struct.pdb[:4].upper()
 
-    def load_mutant(self):
-        mutantname, ws = apply_modeller(self.struct, self.mutations)
-        pth = osp.join(ws, "%s.pdb" % mutantname)
-        with open(pth, 'r') as f:
-            mutant_sturct = parse_pdb(mutantname, f)
-        profiles, alignments = self.struct.profiles, self.struct.alignments
-        ca, cb = self.struct.chains_a, self.struct.chains_b
-        self.mutant = SkempiStruct(mutant_sturct, ca, cb, profiles, alignments)
-
     @property
     def features(self, include_foldx4=True):
         feats = get_features(self.mutant if self.reverse else self.struct, self.mutations).values()
@@ -210,10 +206,11 @@ class SkempiRecord(object):
 
     def __reversed__(self):
         if not self.mutant:
-            self.load_mutant()
+            self.mutant = simulate_mutations(self.struct, self.mutations)
         record = SkempiRecord(self.mutant,
                               [reversed(mut) for mut in self.mutations],
-                              [-v for v in self.ddg_arr], load_mutant=False)
+                              [-v for v in self.ddg_arr],
+                              load_mutant=False, modeller_struct=False)
         record.reverse = not self.reverse
         record.mutant = self.struct
         record.fx4 = foldx4(record)
@@ -245,7 +242,7 @@ class Mutation(object):
 
     def __init__(self, mutation_str):
         self._str = mutation_str
-        iw, im = (0, -1)
+        self.iw, self.im = iw, im = (0, -1)
         try:
             self.w = mutation_str[iw]
             self.chain_id = mutation_str[1]
@@ -259,6 +256,11 @@ class Mutation(object):
             self.i = int(mutation_str[2:-2]) - 1
             self.m = mutation_str[im]
             self.ins_code = mutation_str[-2]
+
+    @property
+    def identity(self):
+        mutation_str = "%s%s" % (self._str[:self.im], self._str[self.iw])
+        return Mutation(mutation_str)
 
     def __str__(self):
         return self._str
@@ -614,7 +616,7 @@ def load_varibench(): return load_protherm(varib_df, PROTHERM_PDBs, True, 0)
 def load_s2648(): return load_protherm(s2648_df, PROTHERM_PDBs, True, 0)
 
 
-def skempi_generator(dataframe, path_to_pdbs, load_mut=True, min_seq_length=0):
+def skempi_generator(dataframe, path_to_pdbs, load_mut=True, modeller_struct=False, min_seq_length=0):
     structs, records = {}, {}
     for i in tqdm(range(len(dataframe)), "loading structures"):
         row = dataframe.loc[i]
@@ -638,17 +640,11 @@ def skempi_generator(dataframe, path_to_pdbs, load_mut=True, min_seq_length=0):
         if key not in structs:
             structs[key] = SkempiStruct(v[0], ca, cb)
         st, ddg_arr = structs[key], v[1:]
-        yield SkempiRecord(st, parse_mutations(ms), ddg_arr, load_mutant=load_mut)
+        yield SkempiRecord(st, parse_mutations(ms), ddg_arr, load_mutant=load_mut, modeller_struct=modeller_struct)
 
 
-def load_skempi(dataframe, path_to_pdbs, load_mut=True, min_seq_length=0):
-    return list(skempi_generator(dataframe, path_to_pdbs, load_mut, min_seq_length))
-
-
-def load_skempi_v1(df): return load_skempi(df[df.version == 1].reset_index(drop=True), SKMEPI2_PDBs, False)
-
-
-def load_skempi_v2(df): return load_skempi(df[df.version == 2].reset_index(drop=True), SKMEPI2_PDBs, False)
+def load_skempi(dataframe, path_to_pdbs, load_mut=True, modeller_struct=False, min_seq_length=0):
+    return list(skempi_generator(dataframe, path_to_pdbs, load_mut, modeller_struct, min_seq_length))
 
 
 def prepare_skempi_v2(path_to_csv=osp.join('..', 'data', 'skempi_v2.csv')):
@@ -713,6 +709,7 @@ try:
     skempi_df_v2["num_muts"] = skempi_df_v2['Mutation(s)_cleaned'].str.split(',').apply(len).values
     varib_df = prepare_varibench()
     s2648_df = prepare_s2648()
+
 except IOError as e:
     print("warning: %s" % e)
     skempi_df = None
@@ -720,7 +717,10 @@ except IOError as e:
 
 
 if __name__ == "__main__":
-    records_v1 = load_skempi(skempi_df_v2[skempi_df_v2.version == 1].reset_index(drop=True), SKMEPI2_PDBs, True)
-    dataset_v1 = reversed(Dataset(records_v1))
-    records_v2 = load_skempi(skempi_df_v2[skempi_df_v2.version == 2].reset_index(drop=True), SKMEPI2_PDBs, True)
-    dataset_v2 = reversed(Dataset(records_v2))
+    s_v1 = set(skempi_df_v2[skempi_df_v2.version == 1].Protein)
+    ix_v1 = (skempi_df_v2.version == 1) | skempi_df_v2.Protein.isin(s_v1)
+    ix_v2 = (skempi_df_v2.version == 2) & ~skempi_df_v2.Protein.isin(s_v1)
+    records_v1 = load_skempi(skempi_df_v2[ix_v1].reset_index(drop=True), SKMEPI2_PDBs, True, True)
+    dataset_v1 = Dataset(records_v1)
+    records_v2 = load_skempi(skempi_df_v2[ix_v2].reset_index(drop=True), SKMEPI2_PDBs, True, True)
+    dataset_v2 = Dataset(records_v2)

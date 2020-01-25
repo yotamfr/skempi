@@ -159,25 +159,22 @@ def _run_hhblits_batched(sequences, collection=None):
 
 
 def _get_profile_func(method="pssm"):
-    func = _get_pssm if method == "pssm" else _get_profile
+    f = _get_pssm if method == "pssm" else _get_profile
 
     def _comp_profile_batched(sequences, collection=None):
 
         records = [SeqRecord(Seq(seq), seqid) for (seqid, seq) in sequences]
-        pbar = tqdm(range(len(records)), desc="sequences processed")
 
         while records:
             batch = []
             while (len(batch) < batch_size) and (len(records) > 0):
                 seq = records.pop()
-                pbar.update(1)
                 batch.append(seq)
-
             pwd = os.getcwd()
             os.chdir(out_dir)
 
             e = ThreadPoolExecutor(num_cpu)
-            for (seq, prof) in e.map(func, [seq for seq in batch]):
+            for (seq, prof) in e.map(f, [seq for seq in batch]):
 
                 if not prof: continue
 
@@ -194,8 +191,6 @@ def _get_profile_func(method="pssm"):
                     }, upsert=True)
 
             os.chdir(pwd)
-
-        pbar.close()
 
     return _comp_profile_batched
 

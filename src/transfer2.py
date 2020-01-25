@@ -13,6 +13,7 @@ from reader_utils import *
 from skempi_lib import *
 from grid_utils import *
 
+VERBOSE = True
 USE_CUDA = True
 BATCH_SIZE = 4
 LR = 0.01
@@ -196,7 +197,7 @@ if __name__ == "__main__":
     indx2 = (skempi_df.num_muts == 1)
     training_set = skempi_df.Protein[indx1 & indx2]
     validation_set = skempi_df.Protein[~indx1 & indx2]
-    records = load_skempi(skempi_df[indx1].reset_index(), PDB_PATH, True)
+    records = load_skempi(skempi_df[indx1].reset_index(), PDB_PATH, True, False)
     ddg_mapper = DDGMapper(records)
     rotations = get_xyz_rotations(0.5)
     # rotations = [None]

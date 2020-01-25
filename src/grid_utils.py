@@ -368,7 +368,7 @@ if __name__ == "__main__":
     from skempi_consts import *
     df = skempi_df_v2
     df, lim = skempi_df_v2, 1000
-    for r in load_skempi(df[df.version == 1][:lim].reset_index(drop=True), SKMEPI2_PDBs, False):
+    for r in load_skempi(df[df.version == 1][:lim].reset_index(drop=True), SKMEPI2_PDBs, False, False):
         if len(r.mutations) > 1:
             points = [r.struct.get_residue(m).center for m in r.mutations]
             obb = OBB.build_from_points(points)
