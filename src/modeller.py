@@ -120,7 +120,7 @@ class Ali(object):
         return "%s\n%s" % (self.template, self.mutant)
 
 
-def apply_modeller(pdb_struct, mutations, expiration_time_sec=EXPIRATION_TIME_SECONDS):
+def apply_modeller(pdb_struct, mutations):
     tmpl = Template(pdb_struct)
     mutant = Mutant(pdb_struct, mutations)
     ws = "modeller/%s" % mutant.name
@@ -131,7 +131,7 @@ def apply_modeller(pdb_struct, mutations, expiration_time_sec=EXPIRATION_TIME_SE
         pdb_struct.to_pdb(dst1)
     create_modeller_workspace(tmpl, mutant, ws)
     dst2 = osp.join(ws, "%s.pdb" % mutant.name)
-    if not osp.exists(dst2):    # or (time.time() - osp.getmtime(dst2) >= expiration_time_sec):
+    if not osp.exists(dst2):
         try:
             cline = "cd %s; %s mutate-model.py" % (ws, sys.executable)
             assert os.WEXITSTATUS(os.system(cline)) == 0
