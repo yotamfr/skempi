@@ -82,7 +82,7 @@ def zscore_filter(ys, eps=10e-6, threshold=3.5):
 
 class SkempiStruct(PDB):
 
-    def __init__(self, pdb_struct, chains_a, chains_b, profiles=None, alignments=None):
+    def __init__(self, pdb_struct, chains_a, chains_b, profiles=None, alignments=None, simulated=False):
         cs = list(chains_a + chains_b)
         super(SkempiStruct, self).__init__(pdb_struct.pdb,
                                            pdb_struct._chains,
@@ -94,6 +94,7 @@ class SkempiStruct(PDB):
         self.chains_a = chains_a
         self.chains_b = chains_b
         self.stride = get_stride(self, chains_a, chains_b)
+        self.simulated = simulated
 
     def init_profiles(self):
         if self.profiles is not None:
@@ -173,7 +174,8 @@ def simulate_mutations(structure, mutations):
         modeled_struct = parse_pdb(mutantname, f)
     profiles, alignments = structure.profiles, structure.alignments
     ca, cb = structure.chains_a, structure.chains_b
-    return SkempiStruct(modeled_struct, ca, cb, profiles, alignments)
+    s = SkempiStruct(modeled_struct, ca, cb, profiles, alignments, simulated=True)
+    return s
 
 
 class SkempiRecord(object):
@@ -188,8 +190,8 @@ class SkempiRecord(object):
             self.mutant = simulate_mutations(self.struct, self.mutations)
         if modeller_struct:
             self.struct = simulate_mutations(self.struct, [mut.identity for mut in self.mutations])
+        self.fx4 = foldx4(self.struct, self.mutations)
         self.reverse = False
-        self.fx4 = foldx4(self)
 
     @property
     def ddg(self):
@@ -213,7 +215,7 @@ class SkempiRecord(object):
                               load_mutant=False, modeller_struct=False)
         record.reverse = not self.reverse
         record.mutant = self.struct
-        record.fx4 = foldx4(record)
+        record.fx4 = foldx4(record.struct, record.mutations)
         return record
 
     def __str__(self):
