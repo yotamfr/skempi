@@ -167,14 +167,14 @@ class ProthermStruct(SkempiStruct):
         return 0.0
 
 
-def simulate_mutations(structure, mutations):
+def simulate_mutations(structure, mutations, simulated=True):
     mutantname, ws = apply_modeller(structure, mutations)
     pth = osp.join(ws, "%s.pdb" % mutantname)
     with open(pth, 'r') as f:
         modeled_struct = parse_pdb(mutantname, f)
     profiles, alignments = structure.profiles, structure.alignments
     ca, cb = structure.chains_a, structure.chains_b
-    s = SkempiStruct(modeled_struct, ca, cb, profiles, alignments, simulated=True)
+    s = SkempiStruct(modeled_struct, ca, cb, profiles, alignments, simulated=simulated)
     return s
 
 
@@ -187,7 +187,7 @@ class SkempiRecord(object):
         assert all([skempi_struct[m.chain_id][m.i].name == m.w for m in mutations])
         self.mutations = mutations
         if load_mutant:
-            self.mutant = simulate_mutations(self.struct, self.mutations)
+            self.mutant = simulate_mutations(self.struct, self.mutations, simulated=False)
         if modeller_struct:
             self.struct = simulate_mutations(self.struct, [mut.identity for mut in self.mutations])
         self.fx4 = foldx4(self.struct, self.mutations)
@@ -207,8 +207,7 @@ class SkempiRecord(object):
         return [self.fx4] + feats if include_foldx4 else feats
 
     def __reversed__(self):
-        if not self.mutant:
-            self.mutant = simulate_mutations(self.struct, self.mutations)
+        assert self.mutant is not None
         record = SkempiRecord(self.mutant,
                               [reversed(mut) for mut in self.mutations],
                               [-v for v in self.ddg_arr],
