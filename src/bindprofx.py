@@ -97,7 +97,7 @@ def foldx4(st, mutations, foldx4_home=FOLDX4_HOME, num_retries=1):
         shutil.copy("%s/runFoldX.py" % foldx4_home, 'foldx4')
         shutil.copy("%s/foldx" % foldx4_home, 'foldx4')
 
-    pdb = "%s_simulated" % st.protein if st.simulated else st.protein
+    pdb = "%s_simulated2" % st.protein if st.simulated else st.protein
     muts = "%s" % "_".join([str(m) for m in mutations])
     ws = osp.abspath("foldx4/%s/%s" % (pdb, muts))
     if osp.exists("%s/score.txt" % ws):
