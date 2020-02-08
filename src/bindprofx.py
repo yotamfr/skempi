@@ -110,8 +110,11 @@ def foldx4(st, mutations, foldx4_home=FOLDX4_HOME, num_retries=1):
         f.write("%s;\n" % ";".join([str(m) for m in mutations]))
 
     cline = "../../runFoldX.py complex.pdb mut_list.txt %s score.txt" % (chains,)
-    p = subprocess.Popen(cline.split(), cwd=ws, stdout=open(os.devnull, 'w'), stderr=subprocess.STDOUT)
-    p.communicate()
+    try:
+        p = subprocess.Popen(cline.split(), cwd=ws, stdout=open(os.devnull, 'w'), stderr=subprocess.STDOUT)
+        p.communicate()
+    except OSError as e:
+        raise e
     if p.returncode == 0:
         return get_bpx_score("%s/score.txt" % (ws,))
     elif num_retries > 0:

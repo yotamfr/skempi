@@ -7,18 +7,14 @@ from pdb_utils import to_fasta
 CDHIT_HOME = "/media/disk1/yotam/skempi/cdhit"
 
 
-def get_cdhit_clusters(fasta_filename,
-                       parse=lambda seq: seq.split('>')[1].split('...')[0].split('|')[0]):
-    cline = '%s/cd-hit -i %s -o %s_60 -c 0.6 -n 4' % (CDHIT_HOME, fasta_filename, fasta_filename)
+def get_cdhit_clusters(fasta_filename, parse=lambda seq: seq.split('>')[1].split('...')[0].split('|')[0], cdhit=CDHIT_HOME):
+    cline = '%s/cd-hit -i %s -o %s_60 -c 0.6 -n 4' % (cdhit, fasta_filename, fasta_filename)
     assert os.WEXITSTATUS(os.system(cline)) == 0
-    cline = '%s/psi-cd-hit/psi-cd-hit.pl -i %s -o %s_30 -c 0.3' % (CDHIT_HOME, fasta_filename, fasta_filename)
+    cline = '%s/psi-cd-hit/psi-cd-hit.pl -i %s -o %s_30 -c 0.3' % (cdhit, fasta_filename, fasta_filename)
     assert os.WEXITSTATUS(os.system(cline)) == 0
-    cline = '%s/clstr_rev.pl %s_60.clstr %s_30.clstr > %s_60-30.clstr' % (
-    CDHIT_HOME, fasta_filename, fasta_filename, fasta_filename)
+    cline = '%s/clstr_rev.pl %s_60.clstr %s_30.clstr > %s_60-30.clstr' % (cdhit, fasta_filename, fasta_filename, fasta_filename)
     assert os.WEXITSTATUS(os.system(cline)) == 0
-
     cluster_file, cluster_dic, reverse_dic = open("%s_60-30.clstr" % fasta_filename), {}, {}
-
     print("Reading cluster groups...")
     cluster_groups = (x[1] for x in itertools.groupby(cluster_file, key=lambda line: line[0] == '>'))
     for cluster in cluster_groups:
@@ -29,7 +25,6 @@ def get_cdhit_clusters(fasta_filename,
         for seqid in ids:
             reverse_dic[seqid] = cluster
     print("Detected %s clusters (>%s%% similarity) groups..." % (len(cluster_dic), 30))
-
     return cluster_dic, reverse_dic
 
 

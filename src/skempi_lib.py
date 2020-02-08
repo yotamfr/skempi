@@ -717,9 +717,9 @@ except IOError as e:
 
 if __name__ == "__main__":
     s_v1 = set(skempi_df_v2[skempi_df_v2.version == 1].Protein)
-    ix_v1 = (skempi_df_v2.version == 1) | skempi_df_v2.Protein.isin(s_v1)
-    ix_v2 = (skempi_df_v2.version == 2) & ~skempi_df_v2.Protein.isin(s_v1)
-    records_v1 = load_skempi(skempi_df_v2[ix_v1].reset_index(drop=True), SKMEPI2_PDBs, True, True)
-    dataset_v1 = Dataset(records_v1)
+    ix_v1 = (skempi_df_v2.version == 1)  # | skempi_df_v2.Protein.isin(s_v1)
+    ix_v2 = (skempi_df_v2.version == 2)  # & ~skempi_df_v2.Protein.isin(s_v1)
+    sum(ix_v1), sum(ix_v2), len(skempi_df_v2)
+    records_v1 = load_skempi(skempi_df_v2[ix_v1].reset_index(drop=True), SKMEPI2_PDBs, True, False)
     records_v2 = load_skempi(skempi_df_v2[ix_v2].reset_index(drop=True), SKMEPI2_PDBs, True, True)
-    dataset_v2 = Dataset(records_v2)
+    len(records_v1), len(records_v2)
