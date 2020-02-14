@@ -2,6 +2,7 @@ import os
 import json
 import itertools
 import numpy as np
+from tqdm import tqdm
 from pdb_utils import to_fasta
 
 CDHIT_HOME = "/media/disk1/yotam/skempi/cdhit"
@@ -24,7 +25,7 @@ def get_cdhit_clusters(fasta_filename, parse=lambda seq: seq.split('>')[1].split
     for cluster, ids in cluster_dic.items():
         for seqid in ids:
             reverse_dic[seqid] = cluster
-    print("Detected %s clusters (>%s%% similarity) groups..." % (len(cluster_dic), 30))
+    print("Detected %d clusters (>30%% similarity) groups..." % (len(cluster_dic),))
     return cluster_dic, reverse_dic
 
 
@@ -58,9 +59,10 @@ def divide_skempi_into_train_and_test(records_v1, records_v2, fasta_filename="..
     trainset = list()
     trainset.extend(records_v1)
     trainset_structures = [rec.struct for rec in records_v1]
-    for rec in records_v2:
+    for rec in tqdm(records_v2, "records processed"):
         if are_similar(rec.struct, trainset_structures, chain_to_cluster):
             trainset_structures.append(rec.struct)
+            trainset.append(rec.simulated)
             trainset.append(rec)
         else:
             testset.append(rec)

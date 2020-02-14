@@ -215,6 +215,13 @@ class SkempiRecord(object):
         record.fx4 = foldx4(record.struct, record.mutations)
         return record
 
+    @property
+    def simulated(self):
+        return SkempiRecord(self.struct,
+                            [Mutation(m._str) for m in self.mutations],
+                            [d for d in self.ddg_arr],
+                            load_mutant=False, modeller_struct=True)
+
     def __str__(self):
         muts = ','.join([str(m) for m in self.mutations])
         return "<%s: %s>" % (self.struct.protein, muts)
@@ -514,6 +521,52 @@ def get_interactions(struct, mut, rad=4.0, ignore_list=BACKBONE_ATOMS):
     interactions = [Interaction(struct, mut, center_res[i], residues[k][j], envs[k][i, j]) for k, (i, j) in enumerate(indices)]
     filtered_interactions = sorted([ii for ii in interactions if ii.atom_a.name not in ignore_list], key=lambda x: x.dist)
     return filtered_interactions
+
+
+class CompactDataset(object):
+
+    def __init__(self, list_of_records):
+        self._X = np.asarray([rec.features for rec in list_of_records], dtype=np.float64)
+        self.df = pd.DataFrame([rec.ddg for rec in list_of_records], columns=["DDG"])
+        self.df["Mutation"] = [','.join([str(m) for m in rr.mutations]) for rr in list_of_records]
+        self.df["Protein"] = [rr.struct.protein for rr in list_of_records]
+        self.df["Num_Muts"] = [len(rr.mutations) for rr in list_of_records]
+        self.df["Num_Chains"] = [rr.struct.num_chains for rr in list_of_records]
+
+    @property
+    def shape(self):
+        return self._X.shape
+
+    @property
+    def X(self):
+        return np.copy(self._X)
+
+    @property
+    def fx4(self):
+        return np.copy(self._X[:, 0])
+
+    @property
+    def y(self):
+        return self.df.DDG.values
+
+    @property
+    def proteins(self):
+        return self.df.Protein
+
+    @property
+    def mutations(self):
+        return self.df.Mutation
+
+    @property
+    def num_chains(self):
+        return self.df.Num_Chains
+
+    @property
+    def num_muts(self):
+        return self.df.Num_Muts
+
+    def __len__(self):
+        return len(self._X)
 
 
 class Dataset(object):
