@@ -231,7 +231,7 @@ def plot_bar_charts_with_confidence_interval(dataframes, titles, labels, size=6)
     for i in range(len(dataframes)):
 
         dfs = dataframes[i]
-        assert 1 <= len(dfs) <= 2
+        assert 1 <= len(dfs) <= 3
 
         reasons = dfs[0].columns.tolist()
         N = len(reasons)
@@ -245,10 +245,10 @@ def plot_bar_charts_with_confidence_interval(dataframes, titles, labels, size=6)
         ax.set_xticklabels(reasons, rotation=0)
 
         all_rects = []
-        for df, pos, label, c, o in zip(dfs, ["left", "right"], labels, ['r', 'b'], [-width / 2, width / 2]):
+        for df, pos, label, c, o in zip(dfs, ["left", "center", "right"], labels, ['r', 'g', 'b'], [-width/3, 0, width/3]):
             means = df.mean()
             stds = df.std()
-            rects = ax.bar(ind + o, means, width, yerr=stds if len(stds) > 0 else None, label=label, color=c)
+            rects = ax.bar(ind + o, means, width/3, yerr=stds if len(stds) > 0 else None, label=label, color=c)
             all_rects.append(rects)
             autolabel(rects, pos)
 

@@ -62,7 +62,6 @@ def divide_skempi_into_train_and_test(records_v1, records_v2, fasta_filename="..
     for rec in tqdm(records_v2, "records processed"):
         if are_similar(rec.struct, trainset_structures, chain_to_cluster):
             trainset_structures.append(rec.struct)
-            trainset.append(rec.simulated)
             trainset.append(rec)
         else:
             testset.append(rec)
