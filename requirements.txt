@@ -6,7 +6,7 @@ backports.shutil-get-terminal-size==1.0.0
 backports.weakref==1.0.post1
 biopython==1.68
 bleach==2.1.4
-certifi==2018.8.24
+certifi==2022.12.7
 cffi==1.11.5
 chardet==3.0.4
 cogent==1.9
